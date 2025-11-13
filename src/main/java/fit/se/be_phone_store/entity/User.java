@@ -49,7 +49,7 @@ public class User implements UserDetails {
     @Column(name = "enabled")
     private Boolean enabled = true;
 
-    @Column(name = "last_login_at")
+    @Transient
     private LocalDateTime lastLoginAt;
 
     // Relationships

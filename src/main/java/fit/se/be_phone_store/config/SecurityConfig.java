@@ -86,23 +86,27 @@ public class SecurityConfig {
                 .exceptionHandling(exception -> exception.authenticationEntryPoint(jwtAuthenticationEntryPoint))
 
                 // Configure authorization rules
+                // Note: context path is /api, so paths here are relative to context path
                 .authorizeHttpRequests(auth -> auth
                         // Public endpoints - Authentication
-                        .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/auth/register").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/auth/refresh").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/auth/forgot-password").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/auth/reset-password").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/signup").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/register").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/verify-email").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/resend-verification").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/forgot-password").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/auth/reset-password").permitAll()
 
                         // Public endpoints - Products (read-only)
-                        .requestMatchers(HttpMethod.GET, "/api/products/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/categories/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/brands/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/colors/**").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/reviews/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/products/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/categories/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/brands/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/colors/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/reviews/**").permitAll()
 
                         // Public endpoints - Images
-                        .requestMatchers(HttpMethod.GET, "/api/images/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/images/**").permitAll()
 
                         // Public endpoints - Documentation
                         .requestMatchers("/api-docs/**").permitAll()
@@ -115,30 +119,31 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/health").permitAll()
 
                         // User endpoints - require authentication
-                        .requestMatchers("/api/auth/profile").authenticated()
-                        .requestMatchers("/api/auth/logout").authenticated()
-                        .requestMatchers("/api/cart/**").authenticated()
-                        .requestMatchers("/api/orders/**").authenticated()
-                        .requestMatchers(HttpMethod.POST, "/api/reviews/**").authenticated()
-                        .requestMatchers(HttpMethod.PUT, "/api/reviews/**").authenticated()
-                        .requestMatchers(HttpMethod.DELETE, "/api/reviews/**").authenticated()
+                        .requestMatchers("/auth/profile").authenticated()
+                        .requestMatchers("/auth/logout").authenticated()
+                        .requestMatchers("/auth/change-password").authenticated()
+                        .requestMatchers("/cart/**").authenticated()
+                        .requestMatchers("/orders/**").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/reviews/**").authenticated()
+                        .requestMatchers(HttpMethod.PUT, "/reviews/**").authenticated()
+                        .requestMatchers(HttpMethod.DELETE, "/reviews/**").authenticated()
 
                         // Admin endpoints - require ADMIN role
-                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.POST, "/api/products/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.PUT, "/api/products/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.DELETE, "/api/products/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.POST, "/api/categories/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.PUT, "/api/categories/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.DELETE, "/api/categories/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.POST, "/api/brands/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.PUT, "/api/brands/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.DELETE, "/api/brands/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.POST, "/api/colors/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.PUT, "/api/colors/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.DELETE, "/api/colors/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.POST, "/api/images/**").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.DELETE, "/api/images/**").hasRole("ADMIN")
+                        .requestMatchers("/admin/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/products/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/products/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/products/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/categories/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/categories/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/categories/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/brands/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/brands/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/brands/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/colors/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/colors/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/colors/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/images/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.DELETE, "/images/**").hasRole("ADMIN")
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         // All other requests require authentication

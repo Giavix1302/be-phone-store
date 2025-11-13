@@ -75,7 +75,7 @@ public class OrderService {
         order.setStatus(Order.OrderStatus.PENDING);
         order.setShippingAddress(request.getShippingAddress());
         if (request.getNotes() != null) {
-            order.setAdminNotes(request.getNotes());
+            order.setNotes(request.getNotes());
         }
 
         Order savedOrder = orderRepository.save(order);
@@ -407,7 +407,7 @@ public class OrderService {
             .totalAmount(order.getTotalAmount())
             .status(order.getStatus().name())
             .shippingAddress(order.getShippingAddress())
-            .notes(order.getAdminNotes())
+            .notes(order.getNotes())
             .customerName(order.getUser().getFullName())
             .customerEmail(order.getUser().getEmail())
             .customerPhone(order.getUser().getPhone())

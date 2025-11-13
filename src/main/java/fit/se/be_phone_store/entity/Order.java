@@ -35,6 +35,9 @@ public class Order {
     @Column(name = "shipping_address", nullable = false, columnDefinition = "TEXT")
     private String shippingAddress;
 
+    @Column(name = "notes", columnDefinition = "TEXT")
+    private String notes;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 

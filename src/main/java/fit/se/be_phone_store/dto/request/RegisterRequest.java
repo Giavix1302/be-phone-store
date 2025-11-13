@@ -28,15 +28,19 @@ public class RegisterRequest {
     @Size(max = 20, message = "Phone number must not exceed 20 characters")
     private String phone;
 
+    @Size(max = 500, message = "Address must not exceed 500 characters")
+    private String address;
+
     // Constructors
     public RegisterRequest() {}
 
-    public RegisterRequest(String username, String email, String password, String fullName, String phone) {
+    public RegisterRequest(String username, String email, String password, String fullName, String phone, String address) {
         this.username = username;
         this.email = email;
         this.password = password;
         this.fullName = fullName;
         this.phone = phone;
+        this.address = address;
     }
 
     // Explicit Getter Methods
@@ -79,5 +83,13 @@ public class RegisterRequest {
 
     public void setPhone(String phone) {
         this.phone = phone;
+    }
+
+    public String getAddress() {
+        return address;
+    }
+
+    public void setAddress(String address) {
+        this.address = address;
     }
 }

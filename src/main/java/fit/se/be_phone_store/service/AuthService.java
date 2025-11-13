@@ -42,6 +42,9 @@ public class AuthService {
     @Autowired
     private JwtUtils jwtUtils;
 
+    @Autowired
+    private EmailVerificationService emailVerificationService;
+
     /**
      * Register new user
      * @param request Registration request data
@@ -62,18 +65,22 @@ public class AuthService {
             throw new UserAlreadyExistsException("Email already exists");
         }
 
-        // Create new user
+        // Create new user (disabled until email verification)
         User user = new User();
         user.setUsername(request.getUsername());
         user.setEmail(request.getEmail());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setFullName(request.getFullName());
         user.setPhone(request.getPhone());
+        user.setAddress(request.getAddress());
         user.setRole(User.Role.USER);
-        user.setEnabled(true);
+        user.setEnabled(false); // Disabled until email verification
 
         User savedUser = userRepository.save(user);
         System.out.println("User registered successfully: " + savedUser.getUsername());
+
+        // Generate and send verification code
+        emailVerificationService.generateVerificationCode(savedUser.getEmail());
 
         // Prepare response data
         Map<String, Object> responseData = new HashMap<>();
@@ -86,51 +93,72 @@ public class AuthService {
     }
 
     /**
-     * Login user and generate JWT token
+     * Login user and generate JWT tokens
      * @param request Login request data
-     * @return API response with login data including JWT token
+     * @return API response with login data including access token and refresh token
      */
-    public ApiResponse<LoginResponse> login(LoginRequest request) {
-        System.out.println("Attempting login for user: " + request.getUsername());
+    public ApiResponse<Map<String, Object>> login(LoginRequest request) {
+        System.out.println("Attempting login for email: " + request.getEmail());
 
         try {
-            // Authenticate user
+            // Get user by email first
+            User user = userRepository.findByEmail(request.getEmail())
+                    .orElseThrow(() -> new AuthenticationException("Email hoặc mật khẩu không đúng"));
+
+            // Check if user is enabled
+            if (!user.getEnabled()) {
+                throw new AuthenticationException("Tài khoản chưa được kích hoạt");
+            }
+
+            // Authenticate user using email (UserDetailsService will handle it)
             Authentication authentication = authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(
-                            request.getUsername(),
+                            request.getEmail(),
                             request.getPassword()
                     )
             );
 
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
-            // Get user details
-            User user = userRepository.findByUsername(request.getUsername())
-                    .orElseThrow(() -> new AuthenticationException("User not found"));
+            // Generate access token
+            String accessToken = jwtUtils.generateJwtToken(authentication);
 
-            // Generate JWT token
-            String token = jwtUtils.generateJwtToken(authentication);
+            // Generate refresh token
+            String refreshToken = jwtUtils.generateRefreshToken(user.getEmail());
 
             // Update last login time
             user.setLastLoginAt(LocalDateTime.now());
             userRepository.save(user);
 
-            // Create login response
-            LoginResponse loginResponse = LoginResponse.builder()
-                    .token(token)
-                    .type("Bearer")
-                    .username(user.getUsername())
+            // Create user info
+            LoginResponse.UserInfo userInfo = LoginResponse.UserInfo.builder()
+                    .id(user.getId())
                     .email(user.getEmail())
-                    .fullName(user.getFullName())
+                    .full_name(user.getFullName())
+                    .phone(user.getPhone())
                     .role(user.getRole().name())
                     .build();
 
-            System.out.println("User logged in successfully: " + user.getUsername());
-            return ApiResponse.success("Login successful", loginResponse);
+            // Create login response
+            LoginResponse loginResponse = LoginResponse.builder()
+                    .access_token(accessToken)
+                    .user(userInfo)
+                    .build();
 
+            System.out.println("User logged in successfully: " + user.getEmail());
+            
+            // Store refresh token in response data for controller to access
+            Map<String, Object> responseData = new HashMap<>();
+            responseData.put("loginResponse", loginResponse);
+            responseData.put("refreshToken", refreshToken);
+            
+            return ApiResponse.success("Đăng nhập thành công", responseData);
+
+        } catch (AuthenticationException e) {
+            throw e;
         } catch (Exception e) {
-            System.err.println("Login failed for user: " + request.getUsername() + " - " + e.getMessage());
-            throw new AuthenticationException("Invalid username or password");
+            System.err.println("Login failed for email: " + request.getEmail() + " - " + e.getMessage());
+            throw new AuthenticationException("Email hoặc mật khẩu không đúng");
         }
     }
 
