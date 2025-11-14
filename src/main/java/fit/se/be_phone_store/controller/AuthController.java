@@ -18,6 +18,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+
+import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -243,10 +245,10 @@ public class AuthController {
      * POST /api/auth/change-password
      */
     @PostMapping("/change-password")
-    public ResponseEntity<ApiResponse<Void>> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
-        ApiResponse<Void> response = authService.changePassword(
-                request.getCurrentPassword(),
-                request.getNewPassword()
+    public ResponseEntity<ApiResponse<Map<String, Object>>> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
+        ApiResponse<Map<String, Object>> response = authService.changePassword(
+                request.getOld_password(),
+                request.getNew_password()
         );
         return ResponseEntity.ok(response);
     }

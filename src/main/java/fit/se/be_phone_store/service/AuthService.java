@@ -222,22 +222,30 @@ public class AuthService {
      * Change user password
      * @param currentPassword Current password
      * @param newPassword New password
-     * @return API response
+     * @return API response with changed_at timestamp
      */
-    public ApiResponse<Void> changePassword(String currentPassword, String newPassword) {
+    public ApiResponse<Map<String, Object>> changePassword(String currentPassword, String newPassword) {
         User currentUser = getCurrentUser();
 
-        // Verify current password
+        // First, verify current password
         if (!passwordEncoder.matches(currentPassword, currentUser.getPassword())) {
-            throw new AuthenticationException("Current password is incorrect");
+            throw new AuthenticationException("Mật khẩu hiện tại không đúng");
+        }
+
+        // Then, check if new password is same as current password
+        if (passwordEncoder.matches(newPassword, currentUser.getPassword())) {
+            throw new AuthenticationException("Mật khẩu mới phải khác mật khẩu hiện tại");
         }
 
         // Update password
         currentUser.setPassword(passwordEncoder.encode(newPassword));
         userRepository.save(currentUser);
 
+        Map<String, Object> responseData = new HashMap<>();
+        responseData.put("changed_at", LocalDateTime.now());
+
         System.out.println("Password changed successfully for user: " + currentUser.getUsername());
-        return ApiResponse.success("Password changed successfully");
+        return ApiResponse.success("Thay đổi mật khẩu thành công", responseData);
     }
 
     /**
