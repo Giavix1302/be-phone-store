@@ -39,12 +39,35 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleBusinessException(BusinessException ex, WebRequest request) {
         log.error("Business exception occurred: {}", ex.getMessage(), ex);
         
-        ErrorResponse errorResponse = ErrorResponse.of(
-            ex.getMessage(),
-            ex.getErrorCode(),
-            ex.getStatusCode(),
-            getPath(request)
-        );
+        ErrorResponse errorResponse;
+        
+        // Check if BadRequestException has data
+        if (ex instanceof BadRequestException) {
+            BadRequestException badRequestEx = (BadRequestException) ex;
+            if (badRequestEx.getData() != null) {
+                errorResponse = ErrorResponse.withData(
+                    ex.getMessage(),
+                    ex.getErrorCode(),
+                    ex.getStatusCode(),
+                    getPath(request),
+                    badRequestEx.getData()
+                );
+            } else {
+                errorResponse = ErrorResponse.of(
+                    ex.getMessage(),
+                    ex.getErrorCode(),
+                    ex.getStatusCode(),
+                    getPath(request)
+                );
+            }
+        } else {
+            errorResponse = ErrorResponse.of(
+                ex.getMessage(),
+                ex.getErrorCode(),
+                ex.getStatusCode(),
+                getPath(request)
+            );
+        }
         
         return ResponseEntity.status(ex.getStatusCode()).body(errorResponse);
     }
