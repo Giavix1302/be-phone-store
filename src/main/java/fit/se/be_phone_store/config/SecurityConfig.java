@@ -122,6 +122,7 @@ public class SecurityConfig {
                         .requestMatchers("/auth/profile").authenticated()
                         .requestMatchers("/auth/logout").authenticated()
                         .requestMatchers("/auth/change-password").authenticated()
+                        .requestMatchers("/users/me/**").authenticated()
                         .requestMatchers("/cart/**").authenticated()
                         .requestMatchers("/orders/**").authenticated()
                         .requestMatchers(HttpMethod.POST, "/reviews/**").authenticated()
