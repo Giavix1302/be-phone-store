@@ -97,6 +97,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/auth/refresh").permitAll()
                         .requestMatchers(HttpMethod.POST, "/auth/forgot-password").permitAll()
                         .requestMatchers(HttpMethod.POST, "/auth/reset-password").permitAll()
+                        .requestMatchers("/mail/**").permitAll()
+
 
                         // Public endpoints - Products (read-only)
                         .requestMatchers(HttpMethod.GET, "/products/**").permitAll()
