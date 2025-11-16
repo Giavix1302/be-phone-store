@@ -6,6 +6,8 @@ import fit.se.be_phone_store.dto.request.ValidateProfileRequest;
 import fit.se.be_phone_store.dto.response.ApiResponse;
 import fit.se.be_phone_store.dto.response.UserProfileResponse;
 import fit.se.be_phone_store.dto.response.UserStatisticsResponse;
+import fit.se.be_phone_store.dto.response.AvatarResponse;
+import fit.se.be_phone_store.dto.response.UpdateAvatarResponse;
 import fit.se.be_phone_store.exception.AuthenticationException;
 import fit.se.be_phone_store.exception.BadRequestException;
 import fit.se.be_phone_store.service.UserService;
@@ -16,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 
@@ -122,6 +125,74 @@ public class UserController {
             response.setMessage("Dữ liệu hợp lệ");
         }
         
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Upload avatar
+     * POST /api/users/me/avatar
+     */
+    @PostMapping("/avatar")
+    public ResponseEntity<ApiResponse<AvatarResponse>> uploadAvatar(
+            @RequestParam("avatar") MultipartFile avatarFile) {
+        log.info("Uploading avatar for current user");
+        
+        try {
+            ApiResponse<AvatarResponse> response = userService.uploadAvatar(avatarFile);
+            return ResponseEntity.ok(response);
+        } catch (BadRequestException e) {
+            ApiResponse<AvatarResponse> errorResponse = ApiResponse.error(
+                e.getMessage(),
+                e.getMessage()
+            );
+            return ResponseEntity.badRequest().body(errorResponse);
+        } catch (Exception e) {
+            log.error("Error uploading avatar: {}", e.getMessage());
+            ApiResponse<AvatarResponse> errorResponse = ApiResponse.error(
+                "Upload ảnh thất bại, vui lòng thử lại",
+                e.getMessage()
+            );
+            return ResponseEntity.badRequest().body(errorResponse);
+        }
+    }
+
+    /**
+     * Update avatar (PATCH endpoint - alternative)
+     * PATCH /api/users/me/avatar
+     */
+    @PatchMapping("/avatar")
+    public ResponseEntity<ApiResponse<UpdateAvatarResponse>> updateAvatar(
+            @RequestParam("avatar") MultipartFile avatarFile) {
+        log.info("Updating avatar for current user (PATCH)");
+        
+        try {
+            ApiResponse<UpdateAvatarResponse> response = userService.updateAvatar(avatarFile);
+            return ResponseEntity.ok(response);
+        } catch (BadRequestException e) {
+            ApiResponse<UpdateAvatarResponse> errorResponse = ApiResponse.error(
+                e.getMessage(),
+                e.getMessage()
+            );
+            return ResponseEntity.badRequest().body(errorResponse);
+        } catch (Exception e) {
+            log.error("Error updating avatar: {}", e.getMessage());
+            ApiResponse<UpdateAvatarResponse> errorResponse = ApiResponse.error(
+                "Upload ảnh thất bại, vui lòng thử lại",
+                e.getMessage()
+            );
+            return ResponseEntity.badRequest().body(errorResponse);
+        }
+    }
+
+    /**
+     * Remove avatar
+     * DELETE /api/users/me/avatar
+     */
+    @DeleteMapping("/avatar")
+    public ResponseEntity<ApiResponse<AvatarResponse>> removeAvatar() {
+        log.info("Removing avatar for current user");
+        
+        ApiResponse<AvatarResponse> response = userService.removeAvatar();
         return ResponseEntity.ok(response);
     }
 }

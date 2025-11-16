@@ -15,9 +15,13 @@ import fit.se.be_phone_store.dto.response.ApiResponse;
 import fit.se.be_phone_store.dto.response.PagedApiResponse;
 import fit.se.be_phone_store.dto.response.UserProfileResponse;
 import fit.se.be_phone_store.dto.response.UserStatisticsResponse;
+import fit.se.be_phone_store.dto.response.AvatarResponse;
+import fit.se.be_phone_store.dto.response.UpdateAvatarResponse;
 import fit.se.be_phone_store.exception.ResourceNotFoundException;
 import fit.se.be_phone_store.exception.UnauthorizedException;
 import fit.se.be_phone_store.exception.BadRequestException;
+import fit.se.be_phone_store.exception.FileStorageException;
+import org.springframework.web.multipart.MultipartFile;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -47,6 +51,7 @@ public class UserService {
     private final OrderRepository orderRepository;
     private final ReviewRepository reviewRepository;
     private final OrderItemRepository orderItemRepository;
+    private final CloudinaryService cloudinaryService;
 
     /**
      * Get user profile by ID
@@ -532,6 +537,165 @@ public class UserService {
 
         String message = isValid ? "Dữ liệu hợp lệ" : "Dữ liệu không hợp lệ";
         return ApiResponse.success(message, result);
+    }
+
+    /**
+     * Upload avatar for current user
+     * @param avatarFile MultipartFile - file ảnh avatar
+     * @return ApiResponse<AvatarResponse>
+     */
+    public ApiResponse<AvatarResponse> uploadAvatar(MultipartFile avatarFile) {
+        log.info("Uploading avatar for current user");
+
+        // Validate file
+        if (avatarFile == null || avatarFile.isEmpty()) {
+            throw new BadRequestException("Vui lòng chọn file ảnh");
+        }
+
+        // Validate file format
+        String originalFilename = avatarFile.getOriginalFilename();
+        if (originalFilename == null || 
+            (!originalFilename.toLowerCase().endsWith(".jpg") &&
+             !originalFilename.toLowerCase().endsWith(".jpeg") &&
+             !originalFilename.toLowerCase().endsWith(".png") &&
+             !originalFilename.toLowerCase().endsWith(".gif") &&
+             !originalFilename.toLowerCase().endsWith(".webp"))) {
+            throw new BadRequestException("File ảnh không hợp lệ. Chỉ chấp nhận: jpg, jpeg, png, gif, webp");
+        }
+
+        // Get current user
+        User currentUser = authService.getCurrentUser();
+
+        try {
+            // Delete old avatar from Cloudinary if exists
+            if (currentUser.getAvatar() != null && !currentUser.getAvatar().isEmpty()) {
+                try {
+                    cloudinaryService.deleteImage(currentUser.getAvatar());
+                } catch (Exception e) {
+                    log.warn("Failed to delete old avatar from Cloudinary: {}", e.getMessage());
+                    // Continue with upload even if deletion fails
+                }
+            }
+
+            // Upload new avatar to Cloudinary
+            String avatarUrl = cloudinaryService.uploadAvatar(avatarFile);
+
+            // Update user avatar
+            currentUser.setAvatar(avatarUrl);
+            User updatedUser = userRepository.save(currentUser);
+
+            // Create response
+            AvatarResponse avatarResponse = new AvatarResponse(
+                updatedUser.getId(),
+                updatedUser.getAvatar(),
+                updatedUser.getUpdatedAt()
+            );
+
+            log.info("Avatar uploaded successfully for user: {}", currentUser.getId());
+            return ApiResponse.success("Cập nhật ảnh đại diện thành công", avatarResponse);
+
+        } catch (FileStorageException e) {
+            log.error("Failed to upload avatar: {}", e.getMessage());
+            throw new BadRequestException("Upload ảnh thất bại, vui lòng thử lại");
+        } catch (Exception e) {
+            log.error("Unexpected error uploading avatar: {}", e.getMessage());
+            throw new BadRequestException("Upload ảnh thất bại, vui lòng thử lại");
+        }
+    }
+
+    /**
+     * Update avatar for current user (PATCH endpoint)
+     * @param avatarFile MultipartFile - file ảnh avatar
+     * @return ApiResponse<UpdateAvatarResponse>
+     */
+    public ApiResponse<UpdateAvatarResponse> updateAvatar(MultipartFile avatarFile) {
+        log.info("Updating avatar for current user (PATCH)");
+
+        // Validate file
+        if (avatarFile == null || avatarFile.isEmpty()) {
+            throw new BadRequestException("Vui lòng chọn file ảnh");
+        }
+
+        // Validate file format
+        String originalFilename = avatarFile.getOriginalFilename();
+        if (originalFilename == null || 
+            (!originalFilename.toLowerCase().endsWith(".jpg") &&
+             !originalFilename.toLowerCase().endsWith(".jpeg") &&
+             !originalFilename.toLowerCase().endsWith(".png") &&
+             !originalFilename.toLowerCase().endsWith(".gif") &&
+             !originalFilename.toLowerCase().endsWith(".webp"))) {
+            throw new BadRequestException("File ảnh không hợp lệ. Chỉ chấp nhận: jpg, jpeg, png, gif, webp");
+        }
+
+        // Get current user
+        User currentUser = authService.getCurrentUser();
+
+        try {
+            // Delete old avatar from Cloudinary if exists
+            if (currentUser.getAvatar() != null && !currentUser.getAvatar().isEmpty()) {
+                try {
+                    cloudinaryService.deleteImage(currentUser.getAvatar());
+                } catch (Exception e) {
+                    log.warn("Failed to delete old avatar from Cloudinary: {}", e.getMessage());
+                    // Continue with upload even if deletion fails
+                }
+            }
+
+            // Upload new avatar to Cloudinary
+            String avatarUrl = cloudinaryService.uploadAvatar(avatarFile);
+
+            // Update user avatar
+            currentUser.setAvatar(avatarUrl);
+            User updatedUser = userRepository.save(currentUser);
+
+            // Create response (simpler format for PATCH)
+            UpdateAvatarResponse avatarResponse = new UpdateAvatarResponse(updatedUser.getAvatar());
+
+            log.info("Avatar updated successfully for user: {}", currentUser.getId());
+            return ApiResponse.success("Cập nhật ảnh đại diện thành công", avatarResponse);
+
+        } catch (FileStorageException e) {
+            log.error("Failed to update avatar: {}", e.getMessage());
+            throw new BadRequestException("Upload ảnh thất bại, vui lòng thử lại");
+        } catch (Exception e) {
+            log.error("Unexpected error updating avatar: {}", e.getMessage());
+            throw new BadRequestException("Upload ảnh thất bại, vui lòng thử lại");
+        }
+    }
+
+    /**
+     * Remove avatar for current user (set to null)
+     * @return ApiResponse<AvatarResponse>
+     */
+    public ApiResponse<AvatarResponse> removeAvatar() {
+        log.info("Removing avatar for current user");
+
+        // Get current user
+        User currentUser = authService.getCurrentUser();
+
+        // Delete avatar from Cloudinary if exists
+        if (currentUser.getAvatar() != null && !currentUser.getAvatar().isEmpty()) {
+            try {
+                cloudinaryService.deleteImage(currentUser.getAvatar());
+            } catch (Exception e) {
+                log.warn("Failed to delete avatar from Cloudinary: {}", e.getMessage());
+                // Continue with removal even if deletion fails
+            }
+        }
+
+        // Set avatar to null
+        currentUser.setAvatar(null);
+        User updatedUser = userRepository.save(currentUser);
+
+        // Create response
+        AvatarResponse avatarResponse = new AvatarResponse(
+            updatedUser.getId(),
+            null,
+            updatedUser.getUpdatedAt()
+        );
+
+        log.info("Avatar removed successfully for user: {}", currentUser.getId());
+        return ApiResponse.success("Xóa ảnh đại diện thành công", avatarResponse);
     }
 
     /**
