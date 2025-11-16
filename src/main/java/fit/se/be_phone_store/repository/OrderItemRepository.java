@@ -125,4 +125,10 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
     void deleteByOrder(Order order);
     
     void deleteByOrderId(Long orderId);
+    
+    // Check if user has purchased product with DELIVERED status
+    @Query("SELECT COUNT(oi) > 0 FROM OrderItem oi " +
+           "JOIN oi.order o " +
+           "WHERE oi.product.id = :productId AND o.user.id = :userId AND o.status = 'DELIVERED'")
+    boolean hasUserPurchasedProduct(@Param("userId") Long userId, @Param("productId") Long productId);
 }
