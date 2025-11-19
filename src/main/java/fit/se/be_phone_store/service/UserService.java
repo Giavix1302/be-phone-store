@@ -1,13 +1,27 @@
 package fit.se.be_phone_store.service;
 
 import fit.se.be_phone_store.entity.User;
+import fit.se.be_phone_store.entity.Order;
+import fit.se.be_phone_store.entity.Review;
+import fit.se.be_phone_store.entity.OrderItem;
+import fit.se.be_phone_store.entity.Product;
 import fit.se.be_phone_store.repository.UserRepository;
+import fit.se.be_phone_store.repository.OrderRepository;
+import fit.se.be_phone_store.repository.ReviewRepository;
+import fit.se.be_phone_store.repository.OrderItemRepository;
 import fit.se.be_phone_store.dto.request.UpdateProfileRequest;
+import fit.se.be_phone_store.dto.request.ValidateProfileRequest;
 import fit.se.be_phone_store.dto.response.ApiResponse;
 import fit.se.be_phone_store.dto.response.PagedApiResponse;
 import fit.se.be_phone_store.dto.response.UserProfileResponse;
+import fit.se.be_phone_store.dto.response.UserStatisticsResponse;
+import fit.se.be_phone_store.dto.response.AvatarResponse;
+import fit.se.be_phone_store.dto.response.UpdateAvatarResponse;
 import fit.se.be_phone_store.exception.ResourceNotFoundException;
 import fit.se.be_phone_store.exception.UnauthorizedException;
+import fit.se.be_phone_store.exception.BadRequestException;
+import fit.se.be_phone_store.exception.FileStorageException;
+import org.springframework.web.multipart.MultipartFile;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -15,10 +29,13 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.Collections;
 
 /**
  * UserService - Handles user management business logic
@@ -31,6 +48,10 @@ public class UserService {
 
     private final UserRepository userRepository;
     private final AuthService authService;
+    private final OrderRepository orderRepository;
+    private final ReviewRepository reviewRepository;
+    private final OrderItemRepository orderItemRepository;
+    private final CloudinaryService cloudinaryService;
 
     /**
      * Get user profile by ID
@@ -82,8 +103,8 @@ public class UserService {
             .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
         // Update profile fields
-        if (request.getFullName() != null) {
-            user.setFullName(request.getFullName());
+        if (request.getFull_name() != null) {
+            user.setFullName(request.getFull_name());
         }
         if (request.getPhone() != null) {
             user.setPhone(request.getPhone());
@@ -319,6 +340,365 @@ public class UserService {
     }
 
     /**
+     * Update current user profile
+     * @param request Update profile request
+     * @return API response
+     */
+    public ApiResponse<UserProfileResponse> updateCurrentUserProfile(UpdateProfileRequest request) {
+        User currentUser = authService.getCurrentUser();
+        return updateUserProfile(currentUser.getId(), request);
+    }
+
+    /**
+     * Update current user profile (partial update)
+     * @param request Update profile request
+     * @return API response
+     */
+    public ApiResponse<UserProfileResponse> updateCurrentUserProfilePartial(UpdateProfileRequest request) {
+        User currentUser = authService.getCurrentUser();
+        return updateUserProfile(currentUser.getId(), request);
+    }
+
+    /**
+     * Get current user statistics
+     * @return API response with user statistics
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<UserStatisticsResponse> getCurrentUserStatistics() {
+        User currentUser = authService.getCurrentUser();
+        Long userId = currentUser.getId();
+
+        // Get all orders for user
+        List<Order> orders = orderRepository.findByUserId(userId);
+        List<Review> reviews = reviewRepository.findByUserId(userId);
+
+        // Calculate account summary
+        int totalOrders = orders.size();
+        int completedOrders = (int) orders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                .count();
+        int cancelledOrders = (int) orders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.CANCELLED)
+                .count();
+        
+        BigDecimal totalSpent = orders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                .map(Order::getTotalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        UserStatisticsResponse.AccountSummary accountSummary = 
+            new UserStatisticsResponse.AccountSummary(
+                currentUser.getCreatedAt(),
+                totalOrders,
+                completedOrders,
+                cancelledOrders,
+                totalSpent,
+                reviews.size()
+            );
+
+        // Calculate order statistics
+        int pendingOrders = (int) orders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.PENDING)
+                .count();
+        int processingOrders = (int) orders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.PROCESSING)
+                .count();
+        int shippedOrders = (int) orders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.SHIPPED)
+                .count();
+
+        UserStatisticsResponse.OrderStatistics orderStatistics = 
+            new UserStatisticsResponse.OrderStatistics(
+                pendingOrders,
+                processingOrders,
+                shippedOrders,
+                completedOrders
+            );
+
+        // Get recent activity
+        Order lastOrder = orders.stream()
+                .max((o1, o2) -> o1.getCreatedAt().compareTo(o2.getCreatedAt()))
+                .orElse(null);
+
+        Review lastReview = reviews.stream()
+                .max((r1, r2) -> r1.getCreatedAt().compareTo(r2.getCreatedAt()))
+                .orElse(null);
+
+        UserStatisticsResponse.LastOrder lastOrderInfo = null;
+        if (lastOrder != null) {
+            lastOrderInfo = new UserStatisticsResponse.LastOrder(
+                lastOrder.getOrderNumber(),
+                lastOrder.getTotalAmount(),
+                lastOrder.getStatus().name(),
+                lastOrder.getCreatedAt()
+            );
+        }
+
+        UserStatisticsResponse.LastReview lastReviewInfo = null;
+        if (lastReview != null && lastReview.getProduct() != null) {
+            lastReviewInfo = new UserStatisticsResponse.LastReview(
+                lastReview.getProduct().getName(),
+                lastReview.getRating(),
+                lastReview.getCreatedAt()
+            );
+        }
+
+        UserStatisticsResponse.RecentActivity recentActivity = 
+            new UserStatisticsResponse.RecentActivity(lastOrderInfo, lastReviewInfo);
+
+        // Find favorite category
+        Map<String, Integer> categoryCount = new HashMap<>();
+        for (Order order : orders) {
+            List<OrderItem> items = orderItemRepository.findByOrder(order);
+            for (OrderItem item : items) {
+                Product product = item.getProduct();
+                if (product.getCategory() != null) {
+                    String categoryName = product.getCategory().getName().name();
+                    categoryCount.put(categoryName, categoryCount.getOrDefault(categoryName, 0) + 1);
+                }
+            }
+        }
+
+        UserStatisticsResponse.FavoriteCategory favoriteCategory = null;
+        if (!categoryCount.isEmpty()) {
+            String favoriteCategoryName = Collections.max(categoryCount.entrySet(), 
+                    Map.Entry.comparingByValue()).getKey();
+            Integer orderCount = categoryCount.get(favoriteCategoryName);
+            favoriteCategory = new UserStatisticsResponse.FavoriteCategory(favoriteCategoryName, orderCount);
+        }
+
+        UserStatisticsResponse statistics = UserStatisticsResponse.builder()
+                .user_id(userId)
+                .account_summary(accountSummary)
+                .order_statistics(orderStatistics)
+                .recent_activity(recentActivity)
+                .favorite_category(favoriteCategory)
+                .build();
+
+        return ApiResponse.success("Lấy thống kê user thành công", statistics);
+    }
+
+    /**
+     * Validate profile data
+     * @param request Validation request
+     * @return API response with validation result
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<Map<String, Object>> validateProfileData(ValidateProfileRequest request) {
+        Map<String, Object> result = new HashMap<>();
+        Map<String, String> errors = new HashMap<>();
+        Map<String, Boolean> validatedFields = new HashMap<>();
+
+        boolean isValid = true;
+
+        // Validate full name
+        if (request.getFull_name() != null) {
+            if (request.getFull_name().length() < 2 || request.getFull_name().length() > 100) {
+                errors.put("full_name", "Họ tên phải có từ 2 đến 100 ký tự");
+                validatedFields.put("full_name", false);
+                isValid = false;
+            } else if (!request.getFull_name().matches("^[\\p{L}\\s'-]+$")) {
+                errors.put("full_name", "Họ tên không được chứa ký tự đặc biệt");
+                validatedFields.put("full_name", false);
+                isValid = false;
+            } else {
+                validatedFields.put("full_name", true);
+            }
+        }
+
+        // Validate phone
+        if (request.getPhone() != null) {
+            if (!request.getPhone().matches("^0[0-9]{9}$")) {
+                errors.put("phone", "Số điện thoại phải có 10 chữ số và bắt đầu bằng 0");
+                validatedFields.put("phone", false);
+                isValid = false;
+            } else {
+                validatedFields.put("phone", true);
+            }
+        }
+
+        // Validate address
+        if (request.getAddress() != null && !request.getAddress().isEmpty()) {
+            if (request.getAddress().length() < 10 || request.getAddress().length() > 500) {
+                errors.put("address", "Địa chỉ phải có từ 10 đến 500 ký tự");
+                validatedFields.put("address", false);
+                isValid = false;
+            } else {
+                validatedFields.put("address", true);
+            }
+        }
+
+        result.put("is_valid", isValid);
+        if (isValid) {
+            result.put("validated_fields", validatedFields);
+        } else {
+            result.put("errors", errors);
+        }
+
+        String message = isValid ? "Dữ liệu hợp lệ" : "Dữ liệu không hợp lệ";
+        return ApiResponse.success(message, result);
+    }
+
+    /**
+     * Upload avatar for current user
+     * @param avatarFile MultipartFile - file ảnh avatar
+     * @return ApiResponse<AvatarResponse>
+     */
+    public ApiResponse<AvatarResponse> uploadAvatar(MultipartFile avatarFile) {
+        log.info("Uploading avatar for current user");
+
+        // Validate file
+        if (avatarFile == null || avatarFile.isEmpty()) {
+            throw new BadRequestException("Vui lòng chọn file ảnh");
+        }
+
+        // Validate file format
+        String originalFilename = avatarFile.getOriginalFilename();
+        if (originalFilename == null || 
+            (!originalFilename.toLowerCase().endsWith(".jpg") &&
+             !originalFilename.toLowerCase().endsWith(".jpeg") &&
+             !originalFilename.toLowerCase().endsWith(".png") &&
+             !originalFilename.toLowerCase().endsWith(".gif") &&
+             !originalFilename.toLowerCase().endsWith(".webp"))) {
+            throw new BadRequestException("File ảnh không hợp lệ. Chỉ chấp nhận: jpg, jpeg, png, gif, webp");
+        }
+
+        // Get current user
+        User currentUser = authService.getCurrentUser();
+
+        try {
+            // Delete old avatar from Cloudinary if exists
+            if (currentUser.getAvatar() != null && !currentUser.getAvatar().isEmpty()) {
+                try {
+                    cloudinaryService.deleteImage(currentUser.getAvatar());
+                } catch (Exception e) {
+                    log.warn("Failed to delete old avatar from Cloudinary: {}", e.getMessage());
+                    // Continue with upload even if deletion fails
+                }
+            }
+
+            // Upload new avatar to Cloudinary
+            String avatarUrl = cloudinaryService.uploadAvatar(avatarFile);
+
+            // Update user avatar
+            currentUser.setAvatar(avatarUrl);
+            User updatedUser = userRepository.save(currentUser);
+
+            // Create response
+            AvatarResponse avatarResponse = new AvatarResponse(
+                updatedUser.getId(),
+                updatedUser.getAvatar(),
+                updatedUser.getUpdatedAt()
+            );
+
+            log.info("Avatar uploaded successfully for user: {}", currentUser.getId());
+            return ApiResponse.success("Cập nhật ảnh đại diện thành công", avatarResponse);
+
+        } catch (FileStorageException e) {
+            log.error("Failed to upload avatar: {}", e.getMessage());
+            throw new BadRequestException("Upload ảnh thất bại, vui lòng thử lại");
+        } catch (Exception e) {
+            log.error("Unexpected error uploading avatar: {}", e.getMessage());
+            throw new BadRequestException("Upload ảnh thất bại, vui lòng thử lại");
+        }
+    }
+
+    /**
+     * Update avatar for current user (PATCH endpoint)
+     * @param avatarFile MultipartFile - file ảnh avatar
+     * @return ApiResponse<UpdateAvatarResponse>
+     */
+    public ApiResponse<UpdateAvatarResponse> updateAvatar(MultipartFile avatarFile) {
+        log.info("Updating avatar for current user (PATCH)");
+
+        // Validate file
+        if (avatarFile == null || avatarFile.isEmpty()) {
+            throw new BadRequestException("Vui lòng chọn file ảnh");
+        }
+
+        // Validate file format
+        String originalFilename = avatarFile.getOriginalFilename();
+        if (originalFilename == null || 
+            (!originalFilename.toLowerCase().endsWith(".jpg") &&
+             !originalFilename.toLowerCase().endsWith(".jpeg") &&
+             !originalFilename.toLowerCase().endsWith(".png") &&
+             !originalFilename.toLowerCase().endsWith(".gif") &&
+             !originalFilename.toLowerCase().endsWith(".webp"))) {
+            throw new BadRequestException("File ảnh không hợp lệ. Chỉ chấp nhận: jpg, jpeg, png, gif, webp");
+        }
+
+        // Get current user
+        User currentUser = authService.getCurrentUser();
+
+        try {
+            // Delete old avatar from Cloudinary if exists
+            if (currentUser.getAvatar() != null && !currentUser.getAvatar().isEmpty()) {
+                try {
+                    cloudinaryService.deleteImage(currentUser.getAvatar());
+                } catch (Exception e) {
+                    log.warn("Failed to delete old avatar from Cloudinary: {}", e.getMessage());
+                    // Continue with upload even if deletion fails
+                }
+            }
+
+            // Upload new avatar to Cloudinary
+            String avatarUrl = cloudinaryService.uploadAvatar(avatarFile);
+
+            // Update user avatar
+            currentUser.setAvatar(avatarUrl);
+            User updatedUser = userRepository.save(currentUser);
+
+            // Create response (simpler format for PATCH)
+            UpdateAvatarResponse avatarResponse = new UpdateAvatarResponse(updatedUser.getAvatar());
+
+            log.info("Avatar updated successfully for user: {}", currentUser.getId());
+            return ApiResponse.success("Cập nhật ảnh đại diện thành công", avatarResponse);
+
+        } catch (FileStorageException e) {
+            log.error("Failed to update avatar: {}", e.getMessage());
+            throw new BadRequestException("Upload ảnh thất bại, vui lòng thử lại");
+        } catch (Exception e) {
+            log.error("Unexpected error updating avatar: {}", e.getMessage());
+            throw new BadRequestException("Upload ảnh thất bại, vui lòng thử lại");
+        }
+    }
+
+    /**
+     * Remove avatar for current user (set to null)
+     * @return ApiResponse<AvatarResponse>
+     */
+    public ApiResponse<AvatarResponse> removeAvatar() {
+        log.info("Removing avatar for current user");
+
+        // Get current user
+        User currentUser = authService.getCurrentUser();
+
+        // Delete avatar from Cloudinary if exists
+        if (currentUser.getAvatar() != null && !currentUser.getAvatar().isEmpty()) {
+            try {
+                cloudinaryService.deleteImage(currentUser.getAvatar());
+            } catch (Exception e) {
+                log.warn("Failed to delete avatar from Cloudinary: {}", e.getMessage());
+                // Continue with removal even if deletion fails
+            }
+        }
+
+        // Set avatar to null
+        currentUser.setAvatar(null);
+        User updatedUser = userRepository.save(currentUser);
+
+        // Create response
+        AvatarResponse avatarResponse = new AvatarResponse(
+            updatedUser.getId(),
+            null,
+            updatedUser.getUpdatedAt()
+        );
+
+        log.info("Avatar removed successfully for user: {}", currentUser.getId());
+        return ApiResponse.success("Xóa ảnh đại diện thành công", avatarResponse);
+    }
+
+    /**
      * Map User entity to UserProfileResponse DTO
      * @param user User entity
      * @return UserProfileResponse DTO
@@ -331,9 +711,11 @@ public class UserService {
             .fullName(user.getFullName())
             .phone(user.getPhone())
             .address(user.getAddress())
+            .avatar(user.getAvatar())
             .role(user.getRole().name())
             .enabled(user.getEnabled())
             .createdAt(user.getCreatedAt())
+            .updatedAt(user.getUpdatedAt())
             .lastLoginAt(user.getLastLoginAt())
             .build();
     }

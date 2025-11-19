@@ -40,16 +40,22 @@ public class User implements UserDetails {
     @Column(columnDefinition = "TEXT")
     private String address;
 
+    @Column(name = "avatar", columnDefinition = "TEXT")
+    private String avatar;
+
     @Enumerated(EnumType.STRING)
     private Role role = Role.USER;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+
     @Column(name = "enabled")
     private Boolean enabled = true;
 
-    @Column(name = "last_login_at")
+    @Transient
     private LocalDateTime lastLoginAt;
 
     // Relationships
@@ -78,6 +84,12 @@ public class User implements UserDetails {
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now();
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
     }
 
     // UserDetails implementation
@@ -137,12 +149,20 @@ public class User implements UserDetails {
         return address;
     }
 
+    public String getAvatar() {
+        return avatar;
+    }
+
     public Role getRole() {
         return role;
     }
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
     }
 
     public Boolean getEnabled() {
@@ -194,12 +214,20 @@ public class User implements UserDetails {
         this.address = address;
     }
 
+    public void setAvatar(String avatar) {
+        this.avatar = avatar;
+    }
+
     public void setRole(Role role) {
         this.role = role;
     }
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
     }
 
     public void setEnabled(Boolean enabled) {

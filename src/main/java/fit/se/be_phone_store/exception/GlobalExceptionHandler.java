@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 
 import jakarta.validation.ConstraintViolation;
@@ -38,12 +39,35 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleBusinessException(BusinessException ex, WebRequest request) {
         log.error("Business exception occurred: {}", ex.getMessage(), ex);
         
-        ErrorResponse errorResponse = ErrorResponse.of(
-            ex.getMessage(),
-            ex.getErrorCode(),
-            ex.getStatusCode(),
-            getPath(request)
-        );
+        ErrorResponse errorResponse;
+        
+        // Check if BadRequestException has data
+        if (ex instanceof BadRequestException) {
+            BadRequestException badRequestEx = (BadRequestException) ex;
+            if (badRequestEx.getData() != null) {
+                errorResponse = ErrorResponse.withData(
+                    ex.getMessage(),
+                    ex.getErrorCode(),
+                    ex.getStatusCode(),
+                    getPath(request),
+                    badRequestEx.getData()
+                );
+            } else {
+                errorResponse = ErrorResponse.of(
+                    ex.getMessage(),
+                    ex.getErrorCode(),
+                    ex.getStatusCode(),
+                    getPath(request)
+                );
+            }
+        } else {
+            errorResponse = ErrorResponse.of(
+                ex.getMessage(),
+                ex.getErrorCode(),
+                ex.getStatusCode(),
+                getPath(request)
+            );
+        }
         
         return ResponseEntity.status(ex.getStatusCode()).body(errorResponse);
     }
@@ -189,6 +213,31 @@ public class GlobalExceptionHandler {
         ErrorResponse errorResponse = ErrorResponse.of(
             message,
             "MISSING_PARAMETER",
+            HttpStatus.BAD_REQUEST.value(),
+            getPath(request)
+        );
+        
+        return ResponseEntity.badRequest().body(errorResponse);
+    }
+
+    /**
+     * Handle missing request part exceptions (for multipart file uploads)
+     */
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<ErrorResponse> handleMissingServletRequestPartException(MissingServletRequestPartException ex, WebRequest request) {
+        log.error("Missing request part exception occurred: {}", ex.getMessage());
+        
+        String partName = ex.getRequestPartName();
+        String message;
+        if (partName != null && partName.equals("avatar")) {
+            message = "Vui lòng chọn file ảnh";
+        } else {
+            message = String.format("Required part '%s' is not present", partName != null ? partName : "unknown");
+        }
+        
+        ErrorResponse errorResponse = ErrorResponse.of(
+            message,
+            "MISSING_REQUEST_PART",
             HttpStatus.BAD_REQUEST.value(),
             getPath(request)
         );

@@ -5,6 +5,7 @@ import fit.se.be_phone_store.entity.User;
 import fit.se.be_phone_store.entity.Product;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -25,7 +26,16 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     
     List<Review> findByProductId(Long productId);
     
+    @EntityGraph(attributePaths = {"user"})
     Page<Review> findByProductId(Long productId, Pageable pageable);
+    
+    // Find reviews by product with eager loading of user
+    @Query("SELECT r FROM Review r JOIN FETCH r.user WHERE r.product.id = :productId")
+    List<Review> findByProductIdWithUser(@Param("productId") Long productId);
+    
+    // Find reviews by product and rating with eager loading of user
+    @Query("SELECT r FROM Review r JOIN FETCH r.user WHERE r.product.id = :productId AND r.rating = :rating")
+    List<Review> findByProductIdAndRatingWithUser(@Param("productId") Long productId, @Param("rating") Integer rating);
     
     // Find reviews by user
     List<Review> findByUser(User user);
@@ -48,6 +58,9 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     List<Review> findByProductAndRating(Product product, Integer rating);
     
     List<Review> findByProductIdAndRating(Long productId, Integer rating);
+    
+    @EntityGraph(attributePaths = {"user"})
+    Page<Review> findByProductIdAndRating(Long productId, Integer rating, Pageable pageable);
     
     // Find reviews by rating range
     List<Review> findByRatingBetween(Integer minRating, Integer maxRating);

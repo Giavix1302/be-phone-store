@@ -32,6 +32,9 @@ public class ErrorResponse {
     
     // For additional error details
     private Map<String, Object> details;
+    
+    // For error data (e.g., out_of_stock_items)
+    private Object data;
 
     /**
      * Create a simple error response
@@ -98,6 +101,21 @@ public class ErrorResponse {
             .status(status)
             .path(path)
             .details(details)
+            .timestamp(LocalDateTime.now())
+            .build();
+    }
+
+    /**
+     * Create error response with data object
+     */
+    public static ErrorResponse withData(String message, String errorCode, int status, String path, Object data) {
+        return ErrorResponse.builder()
+            .success(false)
+            .message(message)
+            .errorCode(errorCode)
+            .status(status)
+            .path(path)
+            .data(data)
             .timestamp(LocalDateTime.now())
             .build();
     }
