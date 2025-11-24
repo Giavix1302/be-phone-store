@@ -7,6 +7,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -19,7 +20,7 @@ import java.util.Optional;
  * ReviewRepository interface for Review entity operations
  */
 @Repository
-public interface ReviewRepository extends JpaRepository<Review, Long> {
+public interface ReviewRepository extends JpaRepository<Review, Long>, JpaSpecificationExecutor<Review> {
 
     // Find reviews by product
     List<Review> findByProduct(Product product);
@@ -62,6 +63,15 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     @EntityGraph(attributePaths = {"user"})
     Page<Review> findByProductIdAndRating(Long productId, Integer rating, Pageable pageable);
     
+    @EntityGraph(attributePaths = {"product"})
+    Page<Review> findByUserId(Long userId, Pageable pageable);
+    
+    @Query("SELECT r FROM Review r " +
+           "LEFT JOIN FETCH r.user " +
+           "LEFT JOIN FETCH r.product " +
+           "WHERE r.id = :id")
+    Optional<Review> findByIdWithUserAndProduct(@Param("id") Long id);
+    
     // Find reviews by rating range
     List<Review> findByRatingBetween(Integer minRating, Integer maxRating);
     
@@ -100,6 +110,8 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     long countByProduct(Product product);
     
     long countByProductId(Long productId);
+    
+    long countByUserId(Long userId);
     
     // Find recent reviews
     List<Review> findByCreatedAtAfter(LocalDateTime date);
@@ -143,6 +155,9 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     // Find reviews for products from specific brand
     @Query("SELECT r FROM Review r WHERE r.product.brand.name = :brandName")
     List<Review> findReviewsByBrandName(@Param("brandName") String brandName);
+    
+    @Query("SELECT AVG(r.rating) FROM Review r WHERE r.user.id = :userId")
+    Double calculateAverageRatingByUserId(@Param("userId") Long userId);
     
     // Get review statistics for product
     @Query("SELECT " +
