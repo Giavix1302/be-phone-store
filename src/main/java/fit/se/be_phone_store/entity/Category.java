@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * Category Entity - Matches database schema exactly
+ * Category Entity - Updated to use VARCHAR for name field
  */
 @Entity
 @Table(name = "categories")
@@ -22,9 +22,8 @@ public class Category {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private CategoryName name;
+    @Column(nullable = false, length = 100, unique = true)
+    private String name;
 
     @Column(columnDefinition = "TEXT")
     private String description;
@@ -32,17 +31,43 @@ public class Category {
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+
     // Relationships
     @OneToMany(mappedBy = "category", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<Product> products;
 
     @PrePersist
     protected void onCreate() {
-        createdAt = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now();
+        createdAt = now;
+        updatedAt = now;
     }
 
-    // Category name enum - matches database ENUM
-    public enum CategoryName {
-        PHONE, TABLET, LAPTOP
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+
+    // Helper method to get product count
+    public int getProductCount() {
+        return products != null ? products.size() : 0;
+    }
+
+    // Helper method to get active product count
+    public long getActiveProductCount() {
+        if (products == null) return 0;
+        return products.stream()
+                .filter(product -> product.getIsActive() != null && product.getIsActive())
+                .count();
+    }
+
+    // Helper method to get inactive product count
+    public long getInactiveProductCount() {
+        if (products == null) return 0;
+        return products.stream()
+                .filter(product -> product.getIsActive() == null || !product.getIsActive())
+                .count();
     }
 }

@@ -453,7 +453,7 @@ public class UserService {
             for (OrderItem item : items) {
                 Product product = item.getProduct();
                 if (product.getCategory() != null) {
-                    String categoryName = product.getCategory().getName().name();
+                    String categoryName = product.getCategory().getName();
                     categoryCount.put(categoryName, categoryCount.getOrDefault(categoryName, 0) + 1);
                 }
             }

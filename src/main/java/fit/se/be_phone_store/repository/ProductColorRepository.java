@@ -59,4 +59,8 @@ public interface ProductColorRepository extends JpaRepository<ProductColor, Long
     // Count products available in color
     @Query("SELECT COUNT(pc) FROM ProductColor pc WHERE pc.color.id = :colorId")
     long countProductsByColorId(@Param("colorId") Long colorId);
+
+    // In ProductColorRepository.java
+    @Query("SELECT COUNT(pc) > 0 FROM ProductColor pc WHERE pc.color.id = :colorId")
+    boolean existsByColorId(@Param("colorId") Long colorId);
 }

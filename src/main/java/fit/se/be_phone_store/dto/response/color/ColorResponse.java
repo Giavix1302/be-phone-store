@@ -1,4 +1,4 @@
-package fit.se.be_phone_store.dto.response;
+package fit.se.be_phone_store.dto.response.color;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;

@@ -1,6 +1,7 @@
 package fit.se.be_phone_store.controller;
 
 import fit.se.be_phone_store.dto.request.*;
+import fit.se.be_phone_store.dto.request.color.UpdateColorRequest;
 import fit.se.be_phone_store.dto.response.*;
 import fit.se.be_phone_store.service.CartService;
 import jakarta.validation.Valid;
@@ -32,14 +33,14 @@ public class CartController {
     public ResponseEntity<ApiResponse<CartDetailResponse>> getCart() {
         log.info("Getting cart for current user");
         ApiResponse<CartDetailResponse> response = cartService.getCart();
-        
-        if (response.getData() != null && response.getData().getItems() != null && 
+
+        if (response.getData() != null && response.getData().getItems() != null &&
             response.getData().getItems().isEmpty()) {
             response.setMessage("Giỏ hàng trống");
         } else {
             response.setMessage("Lấy giỏ hàng thành công");
         }
-        
+
         return ResponseEntity.ok(response);
     }
 
