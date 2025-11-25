@@ -131,4 +131,9 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
            "JOIN oi.order o " +
            "WHERE oi.product.id = :productId AND o.user.id = :userId AND o.status = 'DELIVERED'")
     boolean hasUserPurchasedProduct(@Param("userId") Long userId, @Param("productId") Long productId);
+
+    @Query("SELECT MIN(COALESCE(o.updatedAt, o.createdAt)) FROM OrderItem oi " +
+           "JOIN oi.order o " +
+           "WHERE oi.product.id = :productId AND o.user.id = :userId AND o.status = 'DELIVERED'")
+    LocalDateTime findFirstPurchaseDate(@Param("userId") Long userId, @Param("productId") Long productId);
 }

@@ -7,6 +7,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -19,7 +20,7 @@ import java.util.Optional;
  * ReviewRepository interface for Review entity operations
  */
 @Repository
-public interface ReviewRepository extends JpaRepository<Review, Long> {
+public interface ReviewRepository extends JpaRepository<Review, Long>, JpaSpecificationExecutor<Review> {
 
     // Find reviews by product
     List<Review> findByProduct(Product product);
@@ -62,6 +63,15 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     @EntityGraph(attributePaths = {"user"})
     Page<Review> findByProductIdAndRating(Long productId, Integer rating, Pageable pageable);
     
+    @EntityGraph(attributePaths = {"product"})
+    Page<Review> findByUserId(Long userId, Pageable pageable);
+    
+    @Query("SELECT r FROM Review r " +
+           "LEFT JOIN FETCH r.user " +
+           "LEFT JOIN FETCH r.product " +
+           "WHERE r.id = :id")
+    Optional<Review> findByIdWithUserAndProduct(@Param("id") Long id);
+    
     // Find reviews by rating range
     List<Review> findByRatingBetween(Integer minRating, Integer maxRating);
     
@@ -100,6 +110,12 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     long countByProduct(Product product);
     
     long countByProductId(Long productId);
+    
+    long countByUserId(Long userId);
+
+    long countByProductIdAndRatingGreaterThanEqual(Long productId, Integer rating);
+
+    long countByProductIdAndCreatedAtBetween(Long productId, LocalDateTime from, LocalDateTime to);
     
     // Find recent reviews
     List<Review> findByCreatedAtAfter(LocalDateTime date);
@@ -144,6 +160,18 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     @Query("SELECT r FROM Review r WHERE r.product.brand.name = :brandName")
     List<Review> findReviewsByBrandName(@Param("brandName") String brandName);
     
+    @Query("SELECT AVG(r.rating) FROM Review r WHERE r.user.id = :userId")
+    Double calculateAverageRatingByUserId(@Param("userId") Long userId);
+
+    @Query("""
+        SELECT AVG(r.rating) FROM Review r 
+        WHERE r.product.id = :productId 
+          AND r.createdAt BETWEEN :from AND :to
+    """)
+    Double calculateAverageRatingByProductIdAndDateRange(@Param("productId") Long productId,
+                                                         @Param("from") LocalDateTime from,
+                                                         @Param("to") LocalDateTime to);
+    
     // Get review statistics for product
     @Query("SELECT " +
            "COUNT(r) as totalReviews, " +
@@ -165,4 +193,79 @@ public interface ReviewRepository extends JpaRepository<Review, Long> {
     void deleteByProduct(Product product);
     
     void deleteByProductId(Long productId);
+
+    @Query("""
+        SELECT 
+            COUNT(r) as totalReviews,
+            AVG(r.rating) as avgRating,
+            COUNT(DISTINCT r.product.id) as productCount,
+            COUNT(DISTINCT r.user.id) as reviewerCount
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+    """)
+    List<Object[]> getAdminOverviewStats(@Param("from") LocalDateTime from,
+                                         @Param("to") LocalDateTime to,
+                                         @Param("productId") Long productId);
+
+    @Query("""
+        SELECT 
+            r.rating, COUNT(r)
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+        GROUP BY r.rating
+    """)
+    List<Object[]> getAdminRatingDistribution(@Param("from") LocalDateTime from,
+                                              @Param("to") LocalDateTime to,
+                                              @Param("productId") Long productId);
+
+    @Query("""
+        SELECT 
+            FUNCTION('DATE', r.createdAt) as reviewDate,
+            COUNT(r),
+            AVG(r.rating)
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+        GROUP BY FUNCTION('DATE', r.createdAt)
+        ORDER BY reviewDate
+    """)
+    List<Object[]> getAdminDailyStats(@Param("from") LocalDateTime from,
+                                      @Param("to") LocalDateTime to,
+                                      @Param("productId") Long productId);
+
+    @Query("""
+        SELECT 
+            r.product.id,
+            r.product.name,
+            AVG(r.rating),
+            COUNT(r)
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+        GROUP BY r.product.id, r.product.name
+        ORDER BY AVG(r.rating) DESC, COUNT(r) DESC
+    """)
+    List<Object[]> findTopRatedProductsForAdmin(@Param("from") LocalDateTime from,
+                                                @Param("to") LocalDateTime to,
+                                                @Param("productId") Long productId,
+                                                Pageable pageable);
+
+    @Query("""
+        SELECT 
+            r.user.id,
+            r.user.fullName,
+            COUNT(r),
+            AVG(r.rating)
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+        GROUP BY r.user.id, r.user.fullName
+        ORDER BY COUNT(r) DESC, AVG(r.rating) DESC
+    """)
+    List<Object[]> findMostActiveReviewersForAdmin(@Param("from") LocalDateTime from,
+                                                   @Param("to") LocalDateTime to,
+                                                   @Param("productId") Long productId,
+                                                   Pageable pageable);
 }
