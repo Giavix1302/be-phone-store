@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * Brand Entity - Matches database schema exactly
+ * Brand Entity - Matches database schema exactly with helper methods
  */
 @Entity
 @Table(name = "brands")
@@ -38,5 +38,26 @@ public class Brand {
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
+    }
+
+    // Helper method to get product count
+    public int getProductCount() {
+        return products != null ? products.size() : 0;
+    }
+
+    // Helper method to get active product count
+    public long getActiveProductCount() {
+        if (products == null) return 0;
+        return products.stream()
+                .filter(product -> product.getIsActive() != null && product.getIsActive())
+                .count();
+    }
+
+    // Helper method to get inactive product count
+    public long getInactiveProductCount() {
+        if (products == null) return 0;
+        return products.stream()
+                .filter(product -> product.getIsActive() == null || !product.getIsActive())
+                .count();
     }
 }

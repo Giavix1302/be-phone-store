@@ -46,10 +46,10 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
     
     // Find by category name
     @Query("SELECT p FROM Product p WHERE p.category.name = :categoryName AND p.isActive = true")
-    List<Product> findByCategoryName(@Param("categoryName") Category.CategoryName categoryName);
-    
+    List<Product> findByCategoryName(@Param("categoryName") String categoryName);
+
     @Query("SELECT p FROM Product p WHERE p.category.name = :categoryName AND p.isActive = true")
-    Page<Product> findByCategoryName(@Param("categoryName") Category.CategoryName categoryName, Pageable pageable);
+    Page<Product> findByCategoryName(@Param("categoryName") String categoryName, Pageable pageable);
     
     // Find by brand name
     @Query("SELECT p FROM Product p WHERE p.brand.name = :brandName AND p.isActive = true")
@@ -168,4 +168,7 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
     // Count products by brand
     @Query("SELECT p.brand.name, COUNT(p) FROM Product p WHERE p.isActive = true GROUP BY p.brand.name")
     List<Object[]> countProductsByBrand();
+
+    @Query("SELECT COUNT(p) > 0 FROM Product p WHERE p.color.id = :colorId")
+    boolean existsByColorId(@Param("colorId") Long colorId);
 }
