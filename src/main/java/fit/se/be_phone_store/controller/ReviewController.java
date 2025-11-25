@@ -4,10 +4,12 @@ import fit.se.be_phone_store.dto.request.AdminDeleteReviewRequest;
 import fit.se.be_phone_store.dto.request.CreateReviewRequest;
 import fit.se.be_phone_store.dto.request.UpdateReviewRequest;
 import fit.se.be_phone_store.dto.response.AdminDeleteReviewResponse;
+import fit.se.be_phone_store.dto.response.AdminReviewStatisticsResponse;
 import fit.se.be_phone_store.dto.response.AdminReviewsResponse;
 import fit.se.be_phone_store.dto.response.ApiResponse;
 import fit.se.be_phone_store.dto.response.CreateReviewResponse;
 import fit.se.be_phone_store.dto.response.DeleteReviewResponse;
+import fit.se.be_phone_store.dto.response.ProductReviewStatisticsResponse;
 import fit.se.be_phone_store.dto.response.ProductReviewsResponse;
 import fit.se.be_phone_store.dto.response.ReviewDetailResponse;
 import fit.se.be_phone_store.dto.response.UpdateReviewResponse;
@@ -45,6 +47,18 @@ public class ReviewController {
         log.info("Getting reviews for product: {}", productId);
         ApiResponse<ProductReviewsResponse> response = reviewService.getProductReviews(
                 productId, page, limit, rating, sortBy, sortOrder);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get Product Review Statistics
+     * GET /api/products/{product_id}/reviews/statistics
+     */
+    @GetMapping("/products/{product_id}/reviews/statistics")
+    public ResponseEntity<ApiResponse<ProductReviewStatisticsResponse>> getProductReviewStatistics(
+            @PathVariable("product_id") Long productId) {
+        log.info("Getting review statistics for product: {}", productId);
+        ApiResponse<ProductReviewStatisticsResponse> response = reviewService.getProductReviewStatistics(productId);
         return ResponseEntity.ok(response);
     }
 
@@ -91,6 +105,24 @@ public class ReviewController {
         log.info("Admin fetching reviews");
         ApiResponse<AdminReviewsResponse> response = reviewService.getAllReviewsForAdmin(
                 page, limit, productId, userId, rating, fromDate, toDate, search, sortBy, sortOrder
+        );
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get review statistics (admin)
+     * GET /api/admin/reviews/statistics
+     */
+    @GetMapping("/admin/reviews/statistics")
+    public ResponseEntity<ApiResponse<AdminReviewStatisticsResponse>> getAdminReviewStatistics(
+            @RequestParam(value = "period", defaultValue = "month") String period,
+            @RequestParam(value = "from_date", required = false) String fromDate,
+            @RequestParam(value = "to_date", required = false) String toDate,
+            @RequestParam(value = "product_id", required = false) Long productId
+    ) {
+        log.info("Admin fetching review statistics, period {}", period);
+        ApiResponse<AdminReviewStatisticsResponse> response = reviewService.getAdminReviewStatistics(
+                period, fromDate, toDate, productId
         );
         return ResponseEntity.ok(response);
     }

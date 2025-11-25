@@ -112,6 +112,10 @@ public interface ReviewRepository extends JpaRepository<Review, Long>, JpaSpecif
     long countByProductId(Long productId);
     
     long countByUserId(Long userId);
+
+    long countByProductIdAndRatingGreaterThanEqual(Long productId, Integer rating);
+
+    long countByProductIdAndCreatedAtBetween(Long productId, LocalDateTime from, LocalDateTime to);
     
     // Find recent reviews
     List<Review> findByCreatedAtAfter(LocalDateTime date);
@@ -158,6 +162,15 @@ public interface ReviewRepository extends JpaRepository<Review, Long>, JpaSpecif
     
     @Query("SELECT AVG(r.rating) FROM Review r WHERE r.user.id = :userId")
     Double calculateAverageRatingByUserId(@Param("userId") Long userId);
+
+    @Query("""
+        SELECT AVG(r.rating) FROM Review r 
+        WHERE r.product.id = :productId 
+          AND r.createdAt BETWEEN :from AND :to
+    """)
+    Double calculateAverageRatingByProductIdAndDateRange(@Param("productId") Long productId,
+                                                         @Param("from") LocalDateTime from,
+                                                         @Param("to") LocalDateTime to);
     
     // Get review statistics for product
     @Query("SELECT " +
@@ -180,4 +193,79 @@ public interface ReviewRepository extends JpaRepository<Review, Long>, JpaSpecif
     void deleteByProduct(Product product);
     
     void deleteByProductId(Long productId);
+
+    @Query("""
+        SELECT 
+            COUNT(r) as totalReviews,
+            AVG(r.rating) as avgRating,
+            COUNT(DISTINCT r.product.id) as productCount,
+            COUNT(DISTINCT r.user.id) as reviewerCount
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+    """)
+    List<Object[]> getAdminOverviewStats(@Param("from") LocalDateTime from,
+                                         @Param("to") LocalDateTime to,
+                                         @Param("productId") Long productId);
+
+    @Query("""
+        SELECT 
+            r.rating, COUNT(r)
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+        GROUP BY r.rating
+    """)
+    List<Object[]> getAdminRatingDistribution(@Param("from") LocalDateTime from,
+                                              @Param("to") LocalDateTime to,
+                                              @Param("productId") Long productId);
+
+    @Query("""
+        SELECT 
+            FUNCTION('DATE', r.createdAt) as reviewDate,
+            COUNT(r),
+            AVG(r.rating)
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+        GROUP BY FUNCTION('DATE', r.createdAt)
+        ORDER BY reviewDate
+    """)
+    List<Object[]> getAdminDailyStats(@Param("from") LocalDateTime from,
+                                      @Param("to") LocalDateTime to,
+                                      @Param("productId") Long productId);
+
+    @Query("""
+        SELECT 
+            r.product.id,
+            r.product.name,
+            AVG(r.rating),
+            COUNT(r)
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+        GROUP BY r.product.id, r.product.name
+        ORDER BY AVG(r.rating) DESC, COUNT(r) DESC
+    """)
+    List<Object[]> findTopRatedProductsForAdmin(@Param("from") LocalDateTime from,
+                                                @Param("to") LocalDateTime to,
+                                                @Param("productId") Long productId,
+                                                Pageable pageable);
+
+    @Query("""
+        SELECT 
+            r.user.id,
+            r.user.fullName,
+            COUNT(r),
+            AVG(r.rating)
+        FROM Review r
+        WHERE (:productId IS NULL OR r.product.id = :productId)
+          AND r.createdAt BETWEEN :from AND :to
+        GROUP BY r.user.id, r.user.fullName
+        ORDER BY COUNT(r) DESC, AVG(r.rating) DESC
+    """)
+    List<Object[]> findMostActiveReviewersForAdmin(@Param("from") LocalDateTime from,
+                                                   @Param("to") LocalDateTime to,
+                                                   @Param("productId") Long productId,
+                                                   Pageable pageable);
 }

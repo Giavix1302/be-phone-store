@@ -4,10 +4,12 @@ import fit.se.be_phone_store.dto.request.AdminDeleteReviewRequest;
 import fit.se.be_phone_store.dto.request.CreateReviewRequest;
 import fit.se.be_phone_store.dto.request.UpdateReviewRequest;
 import fit.se.be_phone_store.dto.response.AdminDeleteReviewResponse;
+import fit.se.be_phone_store.dto.response.AdminReviewStatisticsResponse;
 import fit.se.be_phone_store.dto.response.AdminReviewsResponse;
 import fit.se.be_phone_store.dto.response.ApiResponse;
 import fit.se.be_phone_store.dto.response.CreateReviewResponse;
 import fit.se.be_phone_store.dto.response.DeleteReviewResponse;
+import fit.se.be_phone_store.dto.response.ProductReviewStatisticsResponse;
 import fit.se.be_phone_store.dto.response.ProductReviewsResponse;
 import fit.se.be_phone_store.dto.response.ReviewDetailResponse;
 import fit.se.be_phone_store.dto.response.UpdateReviewResponse;
@@ -42,6 +44,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 
 /**
  * ReviewService - Handles product review management business logic
@@ -81,6 +84,80 @@ public class ReviewService {
         }
 
         return getProductReviewsInTransaction(productId, page, limit, rating, sortBy, sortOrder, currentUserId);
+    }
+
+    /**
+     * Get review statistics for a specific product
+     * GET /api/products/{product_id}/reviews/statistics
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<ProductReviewStatisticsResponse> getProductReviewStatistics(Long productId) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ResourceNotFoundException("Sản phẩm không tìm thấy"));
+
+        long totalReviews = reviewRepository.countByProductId(productId);
+        Double avgRatingRaw = reviewRepository.calculateAverageRatingByProductId(productId);
+        double averageRating = normalizeAverage(avgRatingRaw);
+
+        long recommendedCount = reviewRepository.countByProductIdAndRatingGreaterThanEqual(productId, 4);
+        double recommendationPercentage = calculatePercentage(recommendedCount, totalReviews);
+
+        Map<String, ProductReviewStatisticsResponse.RatingStat> ratingBreakdown = createEmptyRatingStats();
+        List<Object[]> ratingCounts = reviewRepository.countReviewsByRatingForProduct(productId);
+        for (Object[] row : ratingCounts) {
+            if (row[0] == null || row[1] == null) {
+                continue;
+            }
+            int ratingValue = ((Number) row[0]).intValue();
+            long countValue = ((Number) row[1]).longValue();
+            double percentage = calculatePercentage(countValue, totalReviews);
+            ratingBreakdown.put(String.valueOf(ratingValue), ProductReviewStatisticsResponse.RatingStat.builder()
+                    .count(countValue)
+                    .percentage(percentage)
+                    .build());
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime last30Start = now.minusDays(30);
+        long last30Count = reviewRepository.countByProductIdAndCreatedAtBetween(productId, last30Start, now);
+        Double last30AvgRaw = reviewRepository.calculateAverageRatingByProductIdAndDateRange(productId, last30Start, now);
+        double last30Average = normalizeAverage(last30AvgRaw);
+
+        LocalDateTime previousStart = last30Start.minusDays(30);
+        LocalDateTime previousEnd = last30Start.minusSeconds(1);
+        Double previousAvgRaw = reviewRepository.calculateAverageRatingByProductIdAndDateRange(productId, previousStart, previousEnd);
+        String ratingTrend = determineRatingTrend(last30AvgRaw, previousAvgRaw);
+
+        ProductReviewStatisticsResponse.ProductInfo productInfo = ProductReviewStatisticsResponse.ProductInfo.builder()
+                .id(product.getId())
+                .name(product.getName())
+                .slug(product.getSlug())
+                .build();
+
+        ProductReviewStatisticsResponse.Overview overview = ProductReviewStatisticsResponse.Overview.builder()
+                .totalReviews(totalReviews)
+                .averageRating(averageRating)
+                .recommendationPercentage(recommendationPercentage)
+                .build();
+
+        ProductReviewStatisticsResponse.Last30Days last30Days = ProductReviewStatisticsResponse.Last30Days.builder()
+                .newReviews(last30Count)
+                .averageRating(last30Average)
+                .build();
+
+        ProductReviewStatisticsResponse.RecentTrends recentTrends = ProductReviewStatisticsResponse.RecentTrends.builder()
+                .last30Days(last30Days)
+                .ratingTrend(ratingTrend)
+                .build();
+
+        ProductReviewStatisticsResponse response = ProductReviewStatisticsResponse.builder()
+                .product(productInfo)
+                .overview(overview)
+                .ratingBreakdown(ratingBreakdown)
+                .recentTrends(recentTrends)
+                .build();
+
+        return ApiResponse.success("Lấy thống kê đánh giá sản phẩm thành công", response);
     }
 
     /**
@@ -492,6 +569,109 @@ public class ReviewService {
     }
 
     /**
+     * Get aggregated review statistics for admin dashboard
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<AdminReviewStatisticsResponse> getAdminReviewStatistics(
+            String period,
+            String fromDate,
+            String toDate,
+            Long productId
+    ) {
+
+        User currentUser = authService.getCurrentUser();
+        if (!currentUser.isAdmin()) {
+            throw new UnauthorizedException("Chỉ quản trị viên mới có thể xem thống kê đánh giá");
+        }
+
+        DateRange dateRange = resolveStatisticsRange(period, fromDate, toDate);
+        LocalDateTime fromDateTime = dateRange.getFrom().atStartOfDay();
+        LocalDateTime toDateTime = dateRange.getTo().atTime(LocalTime.MAX);
+
+        List<Object[]> overviewRows = reviewRepository.getAdminOverviewStats(fromDateTime, toDateTime, productId);
+        Object[] overviewRaw = overviewRows.isEmpty() ? null : overviewRows.get(0);
+        long totalReviews = extractLong(overviewRaw, 0);
+        double averageRating = normalizeAverage(extractDouble(overviewRaw, 1));
+        long totalProductsReviewed = extractLong(overviewRaw, 2);
+        long totalReviewers = extractLong(overviewRaw, 3);
+
+        Map<String, Long> ratingDistribution = initializeRatingDistribution();
+        List<Object[]> ratingRows = reviewRepository.getAdminRatingDistribution(fromDateTime, toDateTime, productId);
+        for (Object[] row : ratingRows) {
+            if (row[0] == null || row[1] == null) {
+                continue;
+            }
+            String ratingKey = String.valueOf(((Number) row[0]).intValue());
+            ratingDistribution.put(ratingKey, ((Number) row[1]).longValue());
+        }
+
+        Map<LocalDate, DailySnapshot> dailySnapshots = new LinkedHashMap<>();
+        for (LocalDate cursor = dateRange.getFrom(); !cursor.isAfter(dateRange.getTo()); cursor = cursor.plusDays(1)) {
+            dailySnapshots.put(cursor, new DailySnapshot(0L, 0.0));
+        }
+        List<Object[]> dailyRows = reviewRepository.getAdminDailyStats(fromDateTime, toDateTime, productId);
+        for (Object[] row : dailyRows) {
+            LocalDate dateKey = convertToLocalDate(row[0]);
+            if (dateKey == null || !dailySnapshots.containsKey(dateKey)) {
+                continue;
+            }
+            long count = row[1] != null ? ((Number) row[1]).longValue() : 0L;
+            double avg = normalizeAverage(row[2] instanceof Double ? (Double) row[2] : row[2] != null ? ((Number) row[2]).doubleValue() : null);
+            dailySnapshots.put(dateKey, new DailySnapshot(count, avg));
+        }
+        List<AdminReviewStatisticsResponse.DailyStat> dailyStats = new ArrayList<>();
+        dailySnapshots.forEach((date, snapshot) -> dailyStats.add(
+                AdminReviewStatisticsResponse.DailyStat.builder()
+                        .date(date.toString())
+                        .reviewsCount(snapshot.count())
+                        .averageRating(snapshot.average())
+                        .build()
+        ));
+
+        List<AdminReviewStatisticsResponse.TopRatedProduct> topRatedProducts = reviewRepository
+                .findTopRatedProductsForAdmin(fromDateTime, toDateTime, productId, PageRequest.of(0, 5))
+                .stream()
+                .map(row -> AdminReviewStatisticsResponse.TopRatedProduct.builder()
+                        .productId(row[0] != null ? ((Number) row[0]).longValue() : null)
+                        .productName((String) row[1])
+                        .averageRating(normalizeAverage(row[2] instanceof Double ? (Double) row[2] : row[2] != null ? ((Number) row[2]).doubleValue() : null))
+                        .totalReviews(row[3] != null ? ((Number) row[3]).longValue() : 0L)
+                        .build())
+                .toList();
+
+        List<AdminReviewStatisticsResponse.MostActiveReviewer> mostActiveReviewers = reviewRepository
+                .findMostActiveReviewersForAdmin(fromDateTime, toDateTime, productId, PageRequest.of(0, 5))
+                .stream()
+                .map(row -> AdminReviewStatisticsResponse.MostActiveReviewer.builder()
+                        .userId(row[0] != null ? ((Number) row[0]).longValue() : null)
+                        .userName((String) row[1])
+                        .totalReviews(row[2] != null ? ((Number) row[2]).longValue() : 0L)
+                        .averageRating(normalizeAverage(row[3] instanceof Double ? (Double) row[3] : row[3] != null ? ((Number) row[3]).doubleValue() : null))
+                        .build())
+                .toList();
+
+        AdminReviewStatisticsResponse.Overview overview = AdminReviewStatisticsResponse.Overview.builder()
+                .totalReviews(totalReviews)
+                .averageRating(averageRating)
+                .totalProductsReviewed(totalProductsReviewed)
+                .totalReviewers(totalReviewers)
+                .build();
+
+        AdminReviewStatisticsResponse response = AdminReviewStatisticsResponse.builder()
+                .period(dateRange.getPeriod())
+                .fromDate(dateRange.getFrom().toString())
+                .toDate(dateRange.getTo().toString())
+                .overview(overview)
+                .ratingDistribution(ratingDistribution)
+                .dailyStats(dailyStats)
+                .topRatedProducts(topRatedProducts)
+                .mostActiveReviewers(mostActiveReviewers)
+                .build();
+
+        return ApiResponse.success("Lấy thống kê đánh giá thành công", response);
+    }
+
+    /**
      * Update an existing review
      */
     @Transactional
@@ -593,6 +773,162 @@ public class ReviewService {
         return ApiResponse.success("Xóa đánh giá thành công", response);
     }
 
+    private Map<String, Long> initializeRatingDistribution() {
+        Map<String, Long> distribution = new LinkedHashMap<>();
+        for (int i = 1; i <= 5; i++) {
+            distribution.put(String.valueOf(i), 0L);
+        }
+        return distribution;
+    }
+
+    private double normalizeAverage(Double value) {
+        if (value == null) {
+            return 0.0;
+        }
+        return roundOneDecimal(value);
+    }
+
+    private Map<String, ProductReviewStatisticsResponse.RatingStat> createEmptyRatingStats() {
+        Map<String, ProductReviewStatisticsResponse.RatingStat> stats = new LinkedHashMap<>();
+        for (int i = 1; i <= 5; i++) {
+            stats.put(String.valueOf(i), ProductReviewStatisticsResponse.RatingStat.builder()
+                    .count(0L)
+                    .percentage(0.0)
+                    .build());
+        }
+        return stats;
+    }
+
+    private double calculatePercentage(long part, long total) {
+        if (total <= 0 || part <= 0) {
+            return 0.0;
+        }
+        return roundOneDecimal((part * 100.0) / total);
+    }
+
+    private double roundOneDecimal(double value) {
+        return Math.round(value * 10.0) / 10.0;
+    }
+
+    private String determineRatingTrend(Double currentAverage, Double previousAverage) {
+        if (currentAverage == null && previousAverage == null) {
+            return "stable";
+        }
+        if (currentAverage != null && previousAverage == null) {
+            return "increasing";
+        }
+        if (currentAverage == null) {
+            return "decreasing";
+        }
+        double diff = currentAverage - previousAverage;
+        if (diff > 0.1) {
+            return "increasing";
+        }
+        if (diff < -0.1) {
+            return "decreasing";
+        }
+        return "stable";
+    }
+
+    private long extractLong(Object[] row, int index) {
+        Number number = extractNumber(row, index);
+        return number == null ? 0L : number.longValue();
+    }
+
+    private Double extractDouble(Object[] row, int index) {
+        Number number = extractNumber(row, index);
+        return number == null ? null : number.doubleValue();
+    }
+
+    private Number extractNumber(Object[] row, int index) {
+        if (row == null || row.length <= index) {
+            return null;
+        }
+        Object value = row[index];
+        if (value instanceof Number number) {
+            return number;
+        }
+        return null;
+    }
+
+    private LocalDate convertToLocalDate(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof LocalDate) {
+            return (LocalDate) value;
+        }
+        if (value instanceof LocalDateTime) {
+            return ((LocalDateTime) value).toLocalDate();
+        }
+        if (value instanceof java.sql.Date date) {
+            return date.toLocalDate();
+        }
+        return null;
+    }
+
+    private DateRange resolveStatisticsRange(String period, String fromDate, String toDate) {
+        LocalDate today = LocalDate.now();
+        boolean hasCustomRange = (fromDate != null && !fromDate.trim().isEmpty())
+                || (toDate != null && !toDate.trim().isEmpty());
+
+        String normalizedPeriod = (period == null || period.trim().isEmpty())
+                ? "month"
+                : period.trim().toLowerCase();
+
+        LocalDate start;
+        LocalDate end;
+
+        if (hasCustomRange) {
+            start = fromDate != null && !fromDate.trim().isEmpty()
+                    ? parseDateOnly(fromDate)
+                    : today.minusMonths(1);
+            end = toDate != null && !toDate.trim().isEmpty()
+                    ? parseDateOnly(toDate)
+                    : today;
+        } else {
+            switch (normalizedPeriod) {
+                case "day" -> {
+                    start = today;
+                    end = today;
+                }
+                case "week" -> {
+                    start = today.minusDays(6);
+                    end = today;
+                }
+                case "year" -> {
+                    start = today.withDayOfYear(1);
+                    end = today.withDayOfYear(today.lengthOfYear());
+                }
+                default -> {
+                    normalizedPeriod = "month";
+                    start = today.withDayOfMonth(1);
+                    end = today.withDayOfMonth(today.lengthOfMonth());
+                }
+            }
+            if (end.isAfter(today)) {
+                end = today;
+            }
+        }
+
+        if (start.isAfter(end)) {
+            throw new BadRequestException("from_date không được lớn hơn to_date");
+        }
+
+        return new DateRange(start, end, hasCustomRange ? "custom" : normalizedPeriod);
+    }
+
+    private LocalDate parseDateOnly(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(value.trim());
+        } catch (DateTimeParseException ex) {
+            throw new BadRequestException("Định dạng ngày không hợp lệ: " + value);
+        }
+    }
+
     private Specification<Review> buildAdminReviewSpecification(
             Long productId,
             Long userId,
@@ -654,6 +990,48 @@ public class ReviewService {
         }
         String[] words = trimmed.split("\\s+");
         return words.length;
+    }
+
+    private static class DateRange {
+        private final LocalDate from;
+        private final LocalDate to;
+        private final String period;
+
+        private DateRange(LocalDate from, LocalDate to, String period) {
+            this.from = from;
+            this.to = to;
+            this.period = period;
+        }
+
+        public LocalDate getFrom() {
+            return from;
+        }
+
+        public LocalDate getTo() {
+            return to;
+        }
+
+        public String getPeriod() {
+            return period;
+        }
+    }
+
+    private static class DailySnapshot {
+        private final long count;
+        private final double average;
+
+        private DailySnapshot(long count, double average) {
+            this.count = count;
+            this.average = average;
+        }
+
+        public long count() {
+            return count;
+        }
+
+        public double average() {
+            return average;
+        }
     }
 
     /**
