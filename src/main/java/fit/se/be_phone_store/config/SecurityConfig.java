@@ -99,7 +99,6 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/auth/reset-password").permitAll()
                         .requestMatchers("/mail/**").permitAll()
 
-
                         // Public endpoints - Products (read-only)
                         .requestMatchers(HttpMethod.GET, "/products/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/categories/**").permitAll()
@@ -150,8 +149,7 @@ public class SecurityConfig {
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
 
                         // All other requests require authentication
-                        .anyRequest().authenticated()
-                );
+                        .anyRequest().authenticated());
 
         // Add JWT filter
         http.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
@@ -168,16 +166,19 @@ public class SecurityConfig {
 
         // Allowed origins (configure for your frontend URLs)
         configuration.setAllowedOrigins(Arrays.asList(
-                "http://localhost:3000",    // React development
-                "http://localhost:8081",    // Alternative frontend port
-                "http://localhost:8080",    // Same origin
+                "http://localhost:3000", // React development
+                "http://localhost:5173", // Vite default dev server
+                "http://127.0.0.1:5173",
+                "http://localhost:5174", // second Vite dev server
+                "http://127.0.0.1:5174",
+                "http://localhost:8081", // Alternative frontend port
+                "http://localhost:8080", // Same origin
                 "https://your-frontend-domain.com" // Production frontend
         ));
 
         // Allowed methods
         configuration.setAllowedMethods(Arrays.asList(
-                "GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"
-        ));
+                "GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
 
         // Allowed headers
         configuration.setAllowedHeaders(Arrays.asList(
@@ -187,15 +188,13 @@ public class SecurityConfig {
                 "Accept",
                 "Origin",
                 "Access-Control-Request-Method",
-                "Access-Control-Request-Headers"
-        ));
+                "Access-Control-Request-Headers"));
 
         // Exposed headers
         configuration.setExposedHeaders(Arrays.asList(
                 "Authorization",
                 "Content-Type",
-                "X-Total-Count"
-        ));
+                "X-Total-Count"));
 
         // Allow credentials
         configuration.setAllowCredentials(true);
