@@ -268,4 +268,17 @@ public interface ReviewRepository extends JpaRepository<Review, Long>, JpaSpecif
                                                    @Param("to") LocalDateTime to,
                                                    @Param("productId") Long productId,
                                                    Pageable pageable);
+
+    /**
+     * Check if user has reviewed product after a specific date
+     */
+    @Query("""
+        SELECT COUNT(r) > 0 FROM Review r
+        WHERE r.user.id = :userId
+          AND r.product.id = :productId
+          AND r.createdAt >= :afterDate
+    """)
+    boolean existsByUserIdAndProductIdAndCreatedAtAfter(@Param("userId") Long userId,
+                                                         @Param("productId") Long productId,
+                                                         @Param("afterDate") LocalDateTime afterDate);
 }

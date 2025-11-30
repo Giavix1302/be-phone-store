@@ -12,15 +12,18 @@ import fit.se.be_phone_store.exception.UnauthorizedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -42,6 +45,8 @@ public class OrderService {
     private final ColorRepository colorRepository;
     private final ReviewRepository reviewRepository;
     private final AuthService authService;
+
+    private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
 
     /**
      * Create order from user's cart
@@ -592,17 +597,18 @@ public class OrderService {
 
     /**
      * Submit order review
+     * POST /api/orders/{order_number}/review
      */
-    public ApiResponse<Map<String, Object>> submitOrderReview(String orderNumber, SubmitOrderReviewRequest request) {
+    public ApiResponse<SubmitOrderReviewResponse> submitOrderReview(String orderNumber, SubmitOrderReviewRequest request) {
         Long userId = authService.getCurrentUserId();
         log.info("Submitting review for order: {} by user {}", orderNumber, userId);
 
         Order order = orderRepository.findByOrderNumber(orderNumber)
-            .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+            .orElseThrow(() -> new ResourceNotFoundException("Đơn hàng không tìm thấy"));
 
         // Check if user owns this order
         if (!order.getUser().getId().equals(userId)) {
-            throw new UnauthorizedException("Access denied");
+            throw new UnauthorizedException("Bạn không có quyền truy cập đơn hàng này");
         }
 
         // Check if order is delivered
@@ -610,46 +616,169 @@ public class OrderService {
             throw new BadRequestException("Chỉ có thể đánh giá đơn hàng đã giao thành công");
         }
 
+        // Load order items explicitly to avoid lazy loading issues
+        List<OrderItem> orderItems = orderItemRepository.findByOrder(order);
+        log.info("Order {} has {} items", orderNumber, orderItems.size());
+
+        if (orderItems.isEmpty()) {
+            throw new BadRequestException("Đơn hàng không có sản phẩm nào");
+        }
+
+        // Get product IDs in the order
+        List<Long> orderProductIds = orderItems.stream()
+            .map(item -> item.getProduct().getId())
+            .distinct()
+            .collect(Collectors.toList());
+
+        log.info("Products in order: {}", orderProductIds);
+
+        // Get order delivered date (when order status became DELIVERED)
+        LocalDateTime orderDeliveredDate = getOrderDeliveredDate(order);
+        if (orderDeliveredDate == null) {
+            // If no delivered tracking found, use order updated_at as fallback
+            orderDeliveredDate = order.getUpdatedAt() != null ? order.getUpdatedAt() : order.getCreatedAt();
+        }
+        log.info("Order {} delivered at: {}", orderNumber, orderDeliveredDate);
+
         // Create reviews for each product
-        List<Map<String, Object>> reviewedProducts = new java.util.ArrayList<>();
+        List<SubmitOrderReviewResponse.ReviewedProduct> reviewedProducts = new ArrayList<>();
+        LocalDateTime reviewedAt = LocalDateTime.now();
+
         for (SubmitOrderReviewRequest.ProductReview reviewRequest : request.getReviews()) {
+            Long productId = reviewRequest.getProduct_id();
+            log.info("Processing review for product ID: {}", productId);
+
             // Check if product is in order
-            boolean productInOrder = order.getOrderItems().stream()
-                .anyMatch(item -> item.getProduct().getId().equals(reviewRequest.getProduct_id()));
-
-            if (!productInOrder) {
-                continue; // Skip products not in order
+            if (!orderProductIds.contains(productId)) {
+                log.warn("Product {} is not in order {}", productId, orderNumber);
+                throw new BadRequestException(String.format("Sản phẩm ID %d không có trong đơn hàng", productId));
             }
 
-            // Check if already reviewed
-            if (reviewRepository.existsByUserIdAndProductId(userId, reviewRequest.getProduct_id())) {
-                continue; // Skip already reviewed products
+            // Get product
+            Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ResourceNotFoundException("Sản phẩm không tìm thấy"));
+
+            boolean reviewedInThisOrder = reviewRepository.existsByUserIdAndProductIdAndCreatedAtAfter(
+                userId, productId, orderDeliveredDate);
+            
+            if (reviewedInThisOrder) {
+                // Product already reviewed in this order - get existing review
+                Optional<Review> existingReview = reviewRepository.findByUserIdAndProductId(userId, productId);
+                
+                if (existingReview.isPresent()) {
+                    Review review = existingReview.get();
+                    log.info("Product {} already reviewed in order {} by user {}, review ID: {}", 
+                        productId, orderNumber, userId, review.getId());
+                    
+                    // Build response for already reviewed product
+                    SubmitOrderReviewResponse.ReviewedProduct reviewedProduct = SubmitOrderReviewResponse.ReviewedProduct.builder()
+                        .productId(product.getId())
+                        .productName(product.getName())
+                        .rating(review.getRating())
+                        .reviewId(review.getId())
+                        .status("already_reviewed")
+                        .message("Sản phẩm này đã được đánh giá trong đơn hàng này")
+                        .build();
+                    
+                    reviewedProducts.add(reviewedProduct);
+                    continue; // Skip creating new review
+                }
             }
 
-            // Create review
+            // Check if review exists from a different order (created before this order was delivered)
+            Optional<Review> existingReview = reviewRepository.findByUserIdAndProductId(userId, productId);
+            if (existingReview.isPresent()) {
+                Review oldReview = existingReview.get();
+                
+             
+                if (oldReview.getCreatedAt().isBefore(orderDeliveredDate)) {
+                    log.info("Product {} was reviewed in a different order, updating review ID {} for order {}", 
+                        productId, oldReview.getId(), orderNumber);
+                    
+                    // Update existing review
+                    oldReview.setRating(reviewRequest.getRating());
+                    oldReview.setComment(reviewRequest.getComment());
+                    Review updatedReview = reviewRepository.save(oldReview);
+                    
+                    // Build response for updated review
+                    SubmitOrderReviewResponse.ReviewedProduct reviewedProduct = SubmitOrderReviewResponse.ReviewedProduct.builder()
+                        .productId(product.getId())
+                        .productName(product.getName())
+                        .rating(reviewRequest.getRating())
+                        .reviewId(updatedReview.getId())
+                        .status("updated")
+                        .message("Đã cập nhật đánh giá từ đơn hàng khác")
+                        .build();
+                    
+                    reviewedProducts.add(reviewedProduct);
+                    continue;
+                }
+            }
+
+            // Create new review (first time reviewing this product)
             Review review = new Review();
             review.setUser(order.getUser());
-            review.setProduct(productRepository.findById(reviewRequest.getProduct_id())
-                .orElseThrow(() -> new ResourceNotFoundException("Product not found")));
+            review.setProduct(product);
             review.setRating(reviewRequest.getRating());
             review.setComment(reviewRequest.getComment());
 
             Review savedReview = reviewRepository.save(review);
+            log.info("Created review ID {} for product ID {} in order {}", savedReview.getId(), productId, orderNumber);
 
-            Map<String, Object> reviewedProduct = new HashMap<>();
-            reviewedProduct.put("product_id", reviewRequest.getProduct_id());
-            reviewedProduct.put("product_name", review.getProduct().getName());
-            reviewedProduct.put("rating", reviewRequest.getRating());
-            reviewedProduct.put("review_id", savedReview.getId());
+            // Build reviewed product response
+            SubmitOrderReviewResponse.ReviewedProduct reviewedProduct = SubmitOrderReviewResponse.ReviewedProduct.builder()
+                .productId(product.getId())
+                .productName(product.getName())
+                .rating(reviewRequest.getRating())
+                .reviewId(savedReview.getId())
+                .status("created")
+                .message("Đánh giá đã được tạo thành công")
+                .build();
+
             reviewedProducts.add(reviewedProduct);
         }
 
-        Map<String, Object> responseData = new HashMap<>();
-        responseData.put("order_number", orderNumber);
-        responseData.put("reviewed_products", reviewedProducts);
-        responseData.put("reviewed_at", LocalDateTime.now());
+        if (reviewedProducts.isEmpty()) {
+            throw new BadRequestException("Không có sản phẩm nào được xử lý");
+        }
 
-        return ApiResponse.success("Order review submitted successfully", responseData);
+        // Count created, updated, and already reviewed
+        long createdCount = reviewedProducts.stream()
+            .filter(p -> "created".equals(p.getStatus()))
+            .count();
+        long updatedCount = reviewedProducts.stream()
+            .filter(p -> "updated".equals(p.getStatus()))
+            .count();
+        long alreadyReviewedCount = reviewedProducts.stream()
+            .filter(p -> "already_reviewed".equals(p.getStatus()))
+            .count();
+
+        // Build appropriate message
+        String message;
+        List<String> parts = new ArrayList<>();
+        if (createdCount > 0) {
+            parts.add(String.format("%d đánh giá mới", createdCount));
+        }
+        if (updatedCount > 0) {
+            parts.add(String.format("%d đánh giá được cập nhật", updatedCount));
+        }
+        if (alreadyReviewedCount > 0) {
+            parts.add(String.format("%d sản phẩm đã được đánh giá trong đơn hàng này", alreadyReviewedCount));
+        }
+        
+        if (parts.isEmpty()) {
+            message = "Đã xử lý đánh giá";
+        } else {
+            message = "Đã xử lý: " + String.join(", ", parts);
+        }
+
+        SubmitOrderReviewResponse responseData = SubmitOrderReviewResponse.builder()
+            .orderNumber(orderNumber)
+            .reviewedProducts(reviewedProducts)
+            .reviewedAt(reviewedAt.format(ISO_FORMATTER))
+            .build();
+
+        return ApiResponse.success(message, responseData);
     }
 
     /**
@@ -659,15 +788,31 @@ public class OrderService {
     public ApiResponse<AdminOrderListResponse> getAllOrders(
             String status, Long userId, LocalDate fromDate, LocalDate toDate, 
             String search, Pageable pageable) {
-        log.info("Getting all orders (Admin)");
+        log.info("Getting all orders (Admin) with filters - status: {}, userId: {}, fromDate: {}, toDate: {}, search: {}", 
+            status, userId, fromDate, toDate, search);
 
         // Check admin permission
         if (!authService.isCurrentUserAdmin()) {
             throw new UnauthorizedException("Admin access required");
         }
 
-        // This is a simplified version - in production, use proper query with filters
-        Page<Order> ordersPage = orderRepository.findAll(pageable);
+        // Parse status enum
+        Order.OrderStatus statusEnum = null;
+        if (status != null && !status.isEmpty()) {
+            try {
+                statusEnum = Order.OrderStatus.valueOf(status.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new BadRequestException("Invalid status: " + status);
+            }
+        }
+
+        // Convert LocalDate to LocalDateTime for query
+        LocalDateTime fromDateTime = fromDate != null ? fromDate.atStartOfDay() : null;
+        LocalDateTime toDateTime = toDate != null ? toDate.atTime(23, 59, 59) : null;
+
+        // Query with filters
+        Page<Order> ordersPage = orderRepository.findOrdersWithFilters(
+            statusEnum, userId, fromDateTime, toDateTime, search, pageable);
         
         List<AdminOrderListResponse.AdminOrderItem> orderItems = ordersPage.getContent().stream()
             .map(this::mapToAdminOrderItem)
@@ -832,11 +977,56 @@ public class OrderService {
                 (int) orders.stream().filter(o -> o.getStatus() == status).count());
         }
 
-        // Daily stats (simplified - in production, use proper aggregation)
-        List<OrderStatisticsResponse.DailyStat> dailyStats = new java.util.ArrayList<>();
+        // Daily stats
+        List<Object[]> dailyStatsData = orderRepository.getDailyOrderStatisticsByDateRange(fromDateTime, toDateTime);
+        List<OrderStatisticsResponse.DailyStat> dailyStats = dailyStatsData.stream()
+            .map(data -> {
+                // Handle different date types from database
+                LocalDate date;
+                if (data[0] instanceof java.sql.Date) {
+                    date = ((java.sql.Date) data[0]).toLocalDate();
+                } else if (data[0] instanceof java.time.LocalDate) {
+                    date = (LocalDate) data[0];
+                } else if (data[0] instanceof java.util.Date) {
+                    date = ((java.util.Date) data[0]).toInstant()
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .toLocalDate();
+                } else {
+                    // Try to parse as string
+                    date = LocalDate.parse(data[0].toString());
+                }
+                
+                Long ordersCount = ((Number) data[1]).longValue();
+                BigDecimal revenue = data[2] != null ? 
+                    BigDecimal.valueOf(((Number) data[2]).doubleValue()) : BigDecimal.ZERO;
+                
+                return OrderStatisticsResponse.DailyStat.builder()
+                    .date(date.toString())
+                    .orders_count(ordersCount.intValue())
+                    .revenue(revenue)
+                    .build();
+            })
+            .collect(Collectors.toList());
 
-        // Top products (simplified)
-        List<OrderStatisticsResponse.TopProduct> topProducts = new java.util.ArrayList<>();
+        // Top products (limit to top 10)
+        List<Object[]> topProductsData = orderItemRepository.findTopProductsByRevenueInDateRange(
+            fromDateTime, toDateTime, 10);
+        List<OrderStatisticsResponse.TopProduct> topProducts = topProductsData.stream()
+            .map(data -> {
+                Long productId = ((Number) data[0]).longValue();
+                String productName = (String) data[1];
+                Long quantitySold = ((Number) data[2]).longValue();
+                BigDecimal revenue = data[3] != null ? 
+                    BigDecimal.valueOf(((Number) data[3]).doubleValue()) : BigDecimal.ZERO;
+                
+                return OrderStatisticsResponse.TopProduct.builder()
+                    .product_id(productId)
+                    .product_name(productName)
+                    .quantity_sold(quantitySold.intValue())
+                    .revenue(revenue)
+                    .build();
+            })
+            .collect(Collectors.toList());
 
         OrderStatisticsResponse response = OrderStatisticsResponse.builder()
             .period(period)
@@ -873,6 +1063,20 @@ public class OrderService {
             return newStatus == Order.OrderStatus.DELIVERED;
         }
         return false;
+    }
+
+    /**
+     * Get the date when order was delivered
+     */
+    private LocalDateTime getOrderDeliveredDate(Order order) {
+        List<OrderTracking> trackingHistory = orderTrackingRepository.findByOrder(order);
+        
+        // Find the first tracking event with DELIVERED status
+        return trackingHistory.stream()
+            .filter(tracking -> tracking.getStatus() == Order.OrderStatus.DELIVERED)
+            .min(java.util.Comparator.comparing(OrderTracking::getCreatedAt))
+            .map(OrderTracking::getCreatedAt)
+            .orElse(null);
     }
 
     private OrderTrackingResponse buildTrackingResponseFromDatabase(Order order, List<OrderTracking> trackingHistory) {
@@ -1017,7 +1221,7 @@ public class OrderService {
             .payment_method(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "COD")
             .items_count(items.size())
             .shipping_address(order.getShippingAddress())
-            .created_at(order.getCreatedAt())
+            .created_at(order.getCreatedAt() != null ? order.getCreatedAt().format(ISO_FORMATTER) : null)
             .build();
     }
 
