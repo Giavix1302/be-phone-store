@@ -37,7 +37,7 @@ public class CategoryController {
      * Get Categories List (User)
      * GET /api/categories
      */
-    @GetMapping("/api/categories")
+    @GetMapping("/categories")
     public ResponseEntity<ApiResponse<List<CategoryResponse>>> getCategories() {
         log.info("Getting categories list for user");
         ApiResponse<List<CategoryResponse>> response = categoryService.getAllCategories();
@@ -49,7 +49,7 @@ public class CategoryController {
      * Get Category Detail (User)
      * GET /api/categories/{id}
      */
-    @GetMapping("/api/categories/{id}")
+    @GetMapping("/categories/{id}")
     public ResponseEntity<ApiResponse<CategoryResponse>> getCategoryDetail(@PathVariable Long id) {
         log.info("Getting category detail for ID: {}", id);
         ApiResponse<CategoryResponse> response = categoryService.getCategoryDetail(id);
@@ -65,7 +65,7 @@ public class CategoryController {
      * Get All Categories (Admin)
      * GET /api/admin/categories
      */
-    @GetMapping("/api/admin/categories")
+    @GetMapping("/admin/categories")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<List<CategoryResponse>>> getAllCategoriesAdmin(
             @RequestParam(defaultValue = "created_at") String sort_by,
@@ -80,7 +80,7 @@ public class CategoryController {
      * Create Category (Admin)
      * POST /api/admin/categories
      */
-    @PostMapping("/api/admin/categories")
+    @PostMapping("/admin/categories")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<CategoryResponse>> createCategory(
             @Valid @RequestBody CreateCategoryRequest request) {
@@ -94,7 +94,7 @@ public class CategoryController {
      * Update Category (Admin)
      * PUT /api/admin/categories/{id}
      */
-    @PutMapping("/api/admin/categories/{id}")
+    @PutMapping("/admin/categories/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<CategoryResponse>> updateCategory(
             @PathVariable Long id,
@@ -109,7 +109,7 @@ public class CategoryController {
      * Delete Category (Admin)
      * DELETE /api/admin/categories/{id}
      */
-    @DeleteMapping("/api/admin/categories/{id}")
+    @DeleteMapping("/admin/categories/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> deleteCategory(@PathVariable Long id) {
         log.info("Deleting category ID: {}", id);
@@ -122,7 +122,7 @@ public class CategoryController {
      * Get Category Statistics (Admin)
      * GET /api/admin/categories/{id}/statistics
      */
-    @GetMapping("/api/admin/categories/{id}/statistics")
+    @GetMapping("/admin/categories/{id}/statistics")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<CategoryStatisticsResponse>> getCategoryStatistics(@PathVariable Long id) {
         log.info("Getting statistics for category ID: {}", id);
@@ -135,7 +135,7 @@ public class CategoryController {
      * Get Categories Overview (Admin)
      * GET /api/admin/categories/overview
      */
-    @GetMapping("/api/admin/categories/overview")
+    @GetMapping("/admin/categories/overview")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<CategoryOverviewResponse>> getCategoriesOverview() {
         log.info("Getting categories overview");

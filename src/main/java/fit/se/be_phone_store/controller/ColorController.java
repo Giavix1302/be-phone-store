@@ -27,7 +27,6 @@ import java.util.Map;
  * ColorController - Handles color-related endpoints for both users and admins
  */
 @RestController
-@RequestMapping("/api") // QUAN TRỌNG: Thêm base mapping
 @RequiredArgsConstructor
 @Slf4j
 @Validated

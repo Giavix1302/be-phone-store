@@ -36,7 +36,7 @@ public class BrandController {
      * Get Brands List (User)
      * GET /api/brands
      */
-    @GetMapping("/api/brands")
+    @GetMapping("/brands")
     public ResponseEntity<ApiResponse<List<BrandResponse>>> getBrands() {
         log.info("Getting brands list for user");
         ApiResponse<List<BrandResponse>> response = brandService.getAllBrands();
@@ -47,7 +47,7 @@ public class BrandController {
      * Get Brand Detail (User)
      * GET /api/brands/{id}
      */
-    @GetMapping("/api/brands/{id}")
+    @GetMapping("/brands/{id}")
     public ResponseEntity<ApiResponse<BrandResponse>> getBrandDetail(@PathVariable Long id) {
         log.info("Getting brand detail for ID: {}", id);
         ApiResponse<BrandResponse> response = brandService.getBrandDetail(id);
@@ -62,7 +62,7 @@ public class BrandController {
      * Get All Brands (Admin)
      * GET /api/admin/brands
      */
-    @GetMapping("/api/admin/brands")
+    @GetMapping("/admin/brands")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<PagedApiResponse<BrandResponse>> getAllBrandsAdmin(
             @RequestParam(defaultValue = "1") int page,
@@ -84,7 +84,7 @@ public class BrandController {
      * Create Brand (Admin)
      * POST /api/admin/brands
      */
-    @PostMapping("/api/admin/brands")
+    @PostMapping("/admin/brands")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<BrandResponse>> createBrand(
             @Valid @RequestBody CreateBrandRequest request) {
@@ -97,7 +97,7 @@ public class BrandController {
      * Update Brand (Admin)
      * PUT /api/admin/brands/{id}
      */
-    @PutMapping("/api/admin/brands/{id}")
+    @PutMapping("/admin/brands/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<BrandResponse>> updateBrand(
             @PathVariable Long id,
@@ -111,7 +111,7 @@ public class BrandController {
      * Delete Brand (Admin)
      * DELETE /api/admin/brands/{id}
      */
-    @DeleteMapping("/api/admin/brands/{id}")
+    @DeleteMapping("/admin/brands/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> deleteBrand(@PathVariable Long id) {
         log.info("Deleting brand ID: {}", id);

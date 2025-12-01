@@ -107,53 +107,128 @@ public class ProductService {
     /**
      * Create new product (Admin API)
      */
+//    public ApiResponse<ProductResponse> createProduct(CreateProductRequest request, MultipartFile[] images) {
+//        log.info("Creating new product: {}", request.getName());
+//
+//        // Check admin permission
+//        if (!authService.isCurrentUserAdmin()) {
+//            throw new UnauthorizedException("Admin access required");
+//        }
+//
+//        // Validate references exist
+//        validateProductReferences(request.getCategoryId(), request.getBrandId(),
+//                request.getColorId(), request.getColorIds());
+//
+//        // Check if slug already exists
+//        String slug = generateSlug(request.getName());
+//        if (productRepository.existsBySlug(slug)) {
+//            slug = slug + "-" + System.currentTimeMillis();
+//        }
+//
+//        // Create product entity
+//        Product product = new Product();
+//        product.setName(request.getName());
+//        product.setSlug(slug);
+//        product.setDescription(request.getDescription());
+//        product.setPrice(request.getPrice());
+//        product.setDiscountPrice(request.getDiscountPrice());
+//        product.setStockQuantity(request.getStockQuantity());
+//        product.setIsActive(request.getIsActive());
+//
+//        // Set references
+//        product.setCategory(categoryRepository.findById(request.getCategoryId()).get());
+//        product.setBrand(brandRepository.findById(request.getBrandId()).get());
+//        product.setColor(colorRepository.findById(request.getColorId()).get());
+//
+//        Product savedProduct = productRepository.save(product);
+//
+//        // Add available colors
+//        addColorsToProduct(savedProduct, request.getColorIds());
+//
+//        // Upload and save images
+//        if (images != null && images.length > 0) {
+//            uploadProductImages(savedProduct, images, request.getImageAlts(), request.getPrimaryImageIndex());
+//        }
+//
+//        ProductResponse response = mapToProductResponse(savedProduct);
+//        log.info("Product created successfully with ID: {}", savedProduct.getId());
+//
+//        return ApiResponse.success("Tạo sản phẩm thành công", response);
+//    }
     public ApiResponse<ProductResponse> createProduct(CreateProductRequest request, MultipartFile[] images) {
         log.info("Creating new product: {}", request.getName());
 
-        // Check admin permission
-        if (!authService.isCurrentUserAdmin()) {
-            throw new UnauthorizedException("Admin access required");
+        try {
+            // Check admin permission
+            if (!authService.isCurrentUserAdmin()) {
+                throw new UnauthorizedException("Admin access required");
+            }
+
+            // DEBUG: Log request details
+            log.info("Product request details: name={}, categoryId={}, brandId={}, colorId={}, colorIds={}",
+                    request.getName(), request.getCategoryId(), request.getBrandId(),
+                    request.getColorId(), request.getColorIds());
+
+            // Validate references exist
+            validateProductReferences(request.getCategoryId(), request.getBrandId(),
+                    request.getColorId(), request.getColorIds());
+
+            // Check if slug already exists
+            String slug = generateSlug(request.getName());
+            if (productRepository.existsBySlug(slug)) {
+                slug = slug + "-" + System.currentTimeMillis();
+            }
+            log.info("Generated slug: {}", slug);
+
+            // Create product entity
+            Product product = new Product();
+            product.setName(request.getName());
+            product.setSlug(slug);
+            product.setDescription(request.getDescription());
+            product.setPrice(request.getPrice());
+            product.setDiscountPrice(request.getDiscountPrice());
+            product.setStockQuantity(request.getStockQuantity());
+            product.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
+
+            // Set references
+            product.setCategory(categoryRepository.findById(request.getCategoryId()).get());
+            product.setBrand(brandRepository.findById(request.getBrandId()).get());
+            product.setColor(colorRepository.findById(request.getColorId()).get());
+
+            Product savedProduct = productRepository.save(product);
+            log.info("Product saved with ID: {}", savedProduct.getId());
+
+            // Add available colors
+            if (request.getColorIds() != null && !request.getColorIds().isEmpty()) {
+                log.info("Adding colors: {}", request.getColorIds());
+                addColorsToProduct(savedProduct, request.getColorIds());
+            }
+
+            // DEBUG: Log images info before upload
+            if (images != null && images.length > 0) {
+                log.info("Starting image upload for {} images", images.length);
+                try {
+                    List<Map<String, Object>> uploadedImages = uploadProductImages(
+                            savedProduct, images, request.getImageAlts(), request.getPrimaryImageIndex());
+                    log.info("Successfully uploaded {} images", uploadedImages.size());
+                } catch (Exception e) {
+                    log.error("Error uploading images for product {}", savedProduct.getId(), e);
+                    // Có thể throw exception hoặc continue tùy business logic
+                    throw new RuntimeException("Failed to upload images: " + e.getMessage(), e);
+                }
+            } else {
+                log.warn("No images to upload for product {}", savedProduct.getId());
+            }
+
+            ProductResponse response = mapToProductResponse(savedProduct);
+            log.info("Product created successfully with ID: {}", savedProduct.getId());
+
+            return ApiResponse.success("Tạo sản phẩm thành công", response);
+
+        } catch (Exception e) {
+            log.error("Error creating product: {}", request.getName(), e);
+            throw e; // Re-throw để GlobalExceptionHandler xử lý
         }
-
-        // Validate references exist
-        validateProductReferences(request.getCategoryId(), request.getBrandId(),
-                request.getColorId(), request.getColorIds());
-
-        // Check if slug already exists
-        String slug = generateSlug(request.getName());
-        if (productRepository.existsBySlug(slug)) {
-            slug = slug + "-" + System.currentTimeMillis();
-        }
-
-        // Create product entity
-        Product product = new Product();
-        product.setName(request.getName());
-        product.setSlug(slug);
-        product.setDescription(request.getDescription());
-        product.setPrice(request.getPrice());
-        product.setDiscountPrice(request.getDiscountPrice());
-        product.setStockQuantity(request.getStockQuantity());
-        product.setIsActive(request.getIsActive());
-
-        // Set references
-        product.setCategory(categoryRepository.findById(request.getCategoryId()).get());
-        product.setBrand(brandRepository.findById(request.getBrandId()).get());
-        product.setColor(colorRepository.findById(request.getColorId()).get());
-
-        Product savedProduct = productRepository.save(product);
-
-        // Add available colors
-        addColorsToProduct(savedProduct, request.getColorIds());
-
-        // Upload and save images
-        if (images != null && images.length > 0) {
-            uploadProductImages(savedProduct, images, request.getImageAlts(), request.getPrimaryImageIndex());
-        }
-
-        ProductResponse response = mapToProductResponse(savedProduct);
-        log.info("Product created successfully with ID: {}", savedProduct.getId());
-
-        return ApiResponse.success("Tạo sản phẩm thành công", response);
     }
 
     /**
@@ -450,6 +525,18 @@ public class ProductService {
             throw new BadRequestException("Hình ảnh không thuộc về sản phẩm này");
         }
 
+        // **FIX: TRẢ VỀ ERROR RESPONSE THAY VÌ THROW EXCEPTION**
+        if (image.getIsPrimary()) {
+            Map<String, Object> errorResponse = new HashMap<>();
+            errorResponse.put("can_delete", false);
+            errorResponse.put("image_id", imageId);
+            errorResponse.put("is_primary", true);
+            errorResponse.put("reason", "primary_image_cannot_be_deleted");
+
+            log.warn("Attempted to delete primary image: {}", imageId);
+            return ApiResponse.error("Không thể xóa hình ảnh chính. Vui lòng chọn hình ảnh khác làm chính trước khi xóa.");
+        }
+
         // Delete from Cloudinary
         cloudinaryService.deleteImage(image.getImageUrl());
 
@@ -458,7 +545,10 @@ public class ProductService {
 
         Map<String, Object> response = new HashMap<>();
         response.put("deleted_image_id", imageId);
+        response.put("can_delete", true);
+        response.put("is_primary", false);
 
+        log.info("Successfully deleted non-primary image: {}", imageId);
         return ApiResponse.success("Xóa hình ảnh thành công", response);
     }
 
@@ -632,43 +722,188 @@ public class ProductService {
         }
     }
 
+//    private List<Map<String, Object>> uploadProductImages(Product product, MultipartFile[] images,
+//                                                          List<String> imageAlts, Integer primaryIndex) {
+//        List<Map<String, Object>> uploadedImages = new ArrayList<>();
+//
+//        if (images == null || images.length == 0) {
+//            throw new BadRequestException("Phải có ít nhất một hình ảnh");
+//        }
+//
+//        for (int i = 0; i < images.length; i++) {
+//            MultipartFile image = images[i];
+//
+//            // Upload to Cloudinary
+//            String imageUrl = cloudinaryService.uploadImage(image, "phone-ecommerce/products");
+//
+//            // Create ProductImage entity
+//            ProductImage productImage = new ProductImage();
+//            productImage.setProduct(product);
+//            productImage.setImageUrl(imageUrl);
+//
+//            if (imageAlts != null && i < imageAlts.size()) {
+//                productImage.setAltText(imageAlts.get(i));
+//            }
+//
+//            boolean isPrimary = (primaryIndex != null && i == primaryIndex) ||
+//                    (primaryIndex == null && i == 0);
+//            productImage.setIsPrimary(isPrimary);
+//
+//            ProductImage savedImage = productImageRepository.save(productImage);
+//
+//            Map<String, Object> imageMap = new HashMap<>();
+//            imageMap.put("id", savedImage.getId());
+//            imageMap.put("image_url", savedImage.getImageUrl());
+//            imageMap.put("alt_text", savedImage.getAltText());
+//            imageMap.put("is_primary", savedImage.getIsPrimary());
+//            uploadedImages.add(imageMap);
+//        }
+//
+//        return uploadedImages;
+//    }
+
+//    private List<Map<String, Object>> uploadProductImages(Product product, MultipartFile[] images,
+//                                                          List<String> imageAlts, Integer primaryIndex) {
+//        List<Map<String, Object>> uploadedImages = new ArrayList<>();
+//
+//        log.info("uploadProductImages called for product {}, {} images", product.getId(), images.length);
+//
+//        if (images == null || images.length == 0) {
+//            throw new BadRequestException("Phải có ít nhất một hình ảnh");
+//        }
+//
+//        for (int i = 0; i < images.length; i++) {
+//            MultipartFile image = images[i];
+//
+//            log.info("Processing image {}/{}: name={}, size={}",
+//                    i+1, images.length, image.getOriginalFilename(), image.getSize());
+//
+//            try {
+//                // Upload to Cloudinary
+//                log.info("Uploading image {} to Cloudinary...", i);
+//                String imageUrl = cloudinaryService.uploadImage(image, "phone-ecommerce/products");
+//                log.info("Image {} uploaded successfully: {}", i, imageUrl);
+//
+//                // Create ProductImage entity
+//                ProductImage productImage = new ProductImage();
+//                productImage.setProduct(product);
+//                productImage.setImageUrl(imageUrl);
+//
+//                if (imageAlts != null && i < imageAlts.size()) {
+//                    productImage.setAltText(imageAlts.get(i));
+//                } else {
+//                    productImage.setAltText("Product image " + (i + 1));
+//                }
+//
+//                boolean isPrimary = (primaryIndex != null && i == primaryIndex) ||
+//                        (primaryIndex == null && i == 0);
+//                productImage.setIsPrimary(isPrimary);
+//
+//                log.info("Saving ProductImage to database: productId={}, imageUrl={}, isPrimary={}",
+//                        product.getId(), imageUrl, isPrimary);
+//
+//                ProductImage savedImage = productImageRepository.save(productImage);
+//
+//                log.info("ProductImage saved successfully with ID: {}", savedImage.getId());
+//
+//                Map<String, Object> imageMap = new HashMap<>();
+//                imageMap.put("id", savedImage.getId());
+//                imageMap.put("image_url", savedImage.getImageUrl());
+//                imageMap.put("alt_text", savedImage.getAltText());
+//                imageMap.put("is_primary", savedImage.getIsPrimary());
+//                uploadedImages.add(imageMap);
+//
+//            } catch (Exception e) {
+//                log.error("Error processing image {}: {}", i, image.getOriginalFilename(), e);
+//                throw new RuntimeException("Failed to process image " + image.getOriginalFilename(), e);
+//            }
+//        }
+//
+//        log.info("Successfully processed all {} images", uploadedImages.size());
+//        return uploadedImages;
+//    }
+
     private List<Map<String, Object>> uploadProductImages(Product product, MultipartFile[] images,
                                                           List<String> imageAlts, Integer primaryIndex) {
         List<Map<String, Object>> uploadedImages = new ArrayList<>();
+
+        log.info("uploadProductImages called for product {}, {} images", product.getId(), images.length);
 
         if (images == null || images.length == 0) {
             throw new BadRequestException("Phải có ít nhất một hình ảnh");
         }
 
+        // **FIX CHÍNH: Kiểm tra có primary image hiện tại không**
+        Optional<ProductImage> existingPrimary = productImageRepository
+                .findByProductIdAndIsPrimaryTrue(product.getId());
+        boolean hasExistingPrimary = existingPrimary.isPresent();
+
+        log.info("Product {} has existing primary image: {}", product.getId(), hasExistingPrimary);
+
         for (int i = 0; i < images.length; i++) {
             MultipartFile image = images[i];
 
-            // Upload to Cloudinary
-            String imageUrl = cloudinaryService.uploadImage(image, "phone-ecommerce/products");
+            log.info("Processing image {}/{}: name={}, size={}",
+                    i+1, images.length, image.getOriginalFilename(), image.getSize());
 
-            // Create ProductImage entity
-            ProductImage productImage = new ProductImage();
-            productImage.setProduct(product);
-            productImage.setImageUrl(imageUrl);
+            try {
+                // Upload to Cloudinary
+                String imageUrl = cloudinaryService.uploadImage(image, "phone-ecommerce/products");
+                log.info("Image {} uploaded successfully: {}", i, imageUrl);
 
-            if (imageAlts != null && i < imageAlts.size()) {
-                productImage.setAltText(imageAlts.get(i));
+                // Create ProductImage entity
+                ProductImage productImage = new ProductImage();
+                productImage.setProduct(product);
+                productImage.setImageUrl(imageUrl);
+
+                if (imageAlts != null && i < imageAlts.size()) {
+                    productImage.setAltText(imageAlts.get(i));
+                } else {
+                    productImage.setAltText("Product image " + (i + 1));
+                }
+
+                // **FIX: Logic primary image hoàn toàn mới**
+                boolean isPrimary = false;
+
+                if (primaryIndex != null && i == primaryIndex) {
+                    // Nếu chỉ định primary index cụ thể
+                    if (hasExistingPrimary) {
+                        // Unset primary image hiện tại
+                        existingPrimary.get().setIsPrimary(false);
+                        productImageRepository.save(existingPrimary.get());
+                        log.info("Unset existing primary image: {}", existingPrimary.get().getId());
+                    }
+                    isPrimary = true;
+                    hasExistingPrimary = true; // Bây giờ đã có primary rồi
+                } else if (primaryIndex == null && i == 0 && !hasExistingPrimary) {
+                    // Chỉ set primary cho image đầu tiên NÕU chưa có primary image nào
+                    isPrimary = true;
+                    hasExistingPrimary = true; // Bây giờ đã có primary rồi
+                }
+                // Ngược lại: isPrimary = false (default)
+
+                productImage.setIsPrimary(isPrimary);
+
+                log.info("Saving ProductImage: productId={}, isPrimary={}", product.getId(), isPrimary);
+
+                ProductImage savedImage = productImageRepository.save(productImage);
+
+                log.info("ProductImage saved successfully with ID: {}", savedImage.getId());
+
+                Map<String, Object> imageMap = new HashMap<>();
+                imageMap.put("id", savedImage.getId());
+                imageMap.put("image_url", savedImage.getImageUrl());
+                imageMap.put("alt_text", savedImage.getAltText());
+                imageMap.put("is_primary", savedImage.getIsPrimary());
+                uploadedImages.add(imageMap);
+
+            } catch (Exception e) {
+                log.error("Error processing image {}: {}", i, image.getOriginalFilename(), e);
+                throw new RuntimeException("Failed to process image " + image.getOriginalFilename(), e);
             }
-
-            boolean isPrimary = (primaryIndex != null && i == primaryIndex) ||
-                    (primaryIndex == null && i == 0);
-            productImage.setIsPrimary(isPrimary);
-
-            ProductImage savedImage = productImageRepository.save(productImage);
-
-            Map<String, Object> imageMap = new HashMap<>();
-            imageMap.put("id", savedImage.getId());
-            imageMap.put("image_url", savedImage.getImageUrl());
-            imageMap.put("alt_text", savedImage.getAltText());
-            imageMap.put("is_primary", savedImage.getIsPrimary());
-            uploadedImages.add(imageMap);
         }
 
+        log.info("Successfully processed all {} images", uploadedImages.size());
         return uploadedImages;
     }
 
