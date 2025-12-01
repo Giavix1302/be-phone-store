@@ -1,5 +1,7 @@
 package fit.se.be_phone_store.controller;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import fit.se.be_phone_store.dto.request.product.ProductFilterRequest;
 import fit.se.be_phone_store.dto.request.product.*;
 import fit.se.be_phone_store.dto.response.ApiResponse;
@@ -40,7 +42,7 @@ public class ProductController {
      * Get Products List (With Search & Filter)
      * GET /api/products
      */
-    @GetMapping("/api/products")
+    @GetMapping("/products")
     public ResponseEntity<PagedApiResponse<ProductResponse>> getProducts(
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "10") Integer limit,
@@ -77,7 +79,7 @@ public class ProductController {
      * Get Product Detail
      * GET /api/products/{slug}
      */
-    @GetMapping("/api/products/{slug}")
+    @GetMapping("/products/{slug}")
     public ResponseEntity<ApiResponse<ProductResponse>> getProductDetail(@PathVariable String slug) {
         log.info("Getting product detail for slug: {}", slug);
         ApiResponse<ProductResponse> response = productService.getProductDetail(slug);
@@ -92,22 +94,56 @@ public class ProductController {
      * Create Product
      * POST /api/admin/products
      */
-    @PostMapping("/api/admin/products")
+    @PostMapping("/admin/products")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<ProductResponse>> createProduct(
-            @Valid @RequestPart("product") CreateProductRequest request,
-            @RequestPart("images") MultipartFile[] images) {
+            @RequestPart("product") String productJson,
+            @RequestPart(value = "images", required = false) MultipartFile[] images) {
 
-        log.info("Creating new product: {}", request.getName());
-        ApiResponse<ProductResponse> response = productService.createProduct(request, images);
-        return ResponseEntity.status(201).body(response);
+        try {
+            ObjectMapper objectMapper = new ObjectMapper();
+            CreateProductRequest request = objectMapper.readValue(productJson, CreateProductRequest.class);
+
+            log.info("Creating new product: {}", request.getName());
+
+            // DEBUG: Kiểm tra images
+            if (images != null) {
+                log.info("Received {} images", images.length);
+                for (int i = 0; i < images.length; i++) {
+                    MultipartFile image = images[i];
+                    log.info("Image {}: name={}, size={}, contentType={}",
+                            i, image.getOriginalFilename(), image.getSize(), image.getContentType());
+                }
+            } else {
+                log.warn("No images received");
+            }
+
+            // DEBUG: Kiểm tra request data
+            log.info("Product request: {}", request);
+
+            ApiResponse<ProductResponse> response = productService.createProduct(request, images);
+
+            // DEBUG: Kiểm tra response
+            log.info("Service response success: {}, message: {}",
+                    response.isSuccess(), response.getMessage());
+
+            return ResponseEntity.status(201).body(response);
+
+        } catch (JsonProcessingException e) {
+            log.error("Error parsing product JSON", e);
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Invalid JSON format", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Unexpected error in createProduct", e);
+            return ResponseEntity.status(500)
+                    .body(ApiResponse.error("Internal server error", e.getMessage()));
+        }
     }
-
     /**
      * Update Product
      * PUT /api/admin/products/{id}
      */
-    @PutMapping("/api/admin/products/{id}")
+    @PutMapping("/admin/products/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<ProductResponse>> updateProduct(
             @PathVariable Long id,
@@ -122,7 +158,7 @@ public class ProductController {
      * Delete Product
      * DELETE /api/admin/products/{id}
      */
-    @DeleteMapping("/api/admin/products/{id}")
+    @DeleteMapping("/admin/products/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> deleteProduct(@PathVariable Long id) {
         log.info("Deleting product ID: {}", id);
@@ -134,7 +170,7 @@ public class ProductController {
      * Update Product Stock
      * PATCH /api/admin/products/{id}/stock
      */
-    @PatchMapping("/api/admin/products/{id}/stock")
+    @PatchMapping("/admin/products/{id}/stock")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<StockUpdateResponse>> updateStock(
             @PathVariable Long id,
@@ -149,7 +185,7 @@ public class ProductController {
      * Add Colors to Product
      * POST /api/admin/products/{id}/colors
      */
-    @PostMapping("/api/admin/products/{id}/colors")
+    @PostMapping("/admin/products/{id}/colors")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> addColorsToProduct(
             @PathVariable Long id,
@@ -164,7 +200,7 @@ public class ProductController {
      * Remove Colors from Product
      * DELETE /api/admin/products/{id}/colors
      */
-    @DeleteMapping("/api/admin/products/{id}/colors")
+    @DeleteMapping("/admin/products/{id}/colors")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> removeColorsFromProduct(
             @PathVariable Long id,
@@ -179,17 +215,17 @@ public class ProductController {
      * Add Images to Product
      * POST /api/admin/products/{id}/images
      */
-    @PostMapping("/api/admin/products/{id}/images")
+    @PostMapping("/admin/products/{id}/images")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> addImagesToProduct(
             @PathVariable Long id,
             @RequestPart("images") MultipartFile[] images,
-            @RequestPart(value = "image_alts", required = false) String[] imageAltsArray) {
+            @RequestParam(value = "image_alts", required = false) String[] imageAlts) {
 
         log.info("Adding images to product ID: {}", id);
 
-        List<String> imageAlts = imageAltsArray != null ? Arrays.asList(imageAltsArray) : null;
-        ApiResponse<Map<String, Object>> response = productService.addImagesToProduct(id, images, imageAlts);
+        List<String> imageAltsList = imageAlts != null ? Arrays.asList(imageAlts) : null;
+        ApiResponse<Map<String, Object>> response = productService.addImagesToProduct(id, images, imageAltsList);
         return ResponseEntity.ok(response);
     }
 
@@ -197,7 +233,7 @@ public class ProductController {
      * Update Image
      * PUT /api/admin/products/{product_id}/images/{image_id}
      */
-    @PutMapping("/api/admin/products/{product_id}/images/{image_id}")
+    @PutMapping("/admin/products/{product_id}/images/{image_id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> updateImage(
             @PathVariable Long product_id,
@@ -213,7 +249,7 @@ public class ProductController {
      * Delete Image
      * DELETE /api/admin/products/{product_id}/images/{image_id}
      */
-    @DeleteMapping("/api/admin/products/{product_id}/images/{image_id}")
+    @DeleteMapping("/admin/products/{product_id}/images/{image_id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> deleteImage(
             @PathVariable Long product_id,
@@ -228,7 +264,7 @@ public class ProductController {
      * Add Specifications to Product
      * POST /api/admin/products/{id}/specifications
      */
-    @PostMapping("/api/admin/products/{id}/specifications")
+    @PostMapping("/admin/products/{id}/specifications")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> addSpecificationsToProduct(
             @PathVariable Long id,
@@ -243,7 +279,7 @@ public class ProductController {
      * Update Specification
      * PUT /api/admin/products/{product_id}/specifications/{spec_id}
      */
-    @PutMapping("/api/admin/products/{product_id}/specifications/{spec_id}")
+    @PutMapping("/admin/products/{product_id}/specifications/{spec_id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> updateSpecification(
             @PathVariable Long product_id,
@@ -259,7 +295,7 @@ public class ProductController {
      * Delete Specification
      * DELETE /api/admin/products/{product_id}/specifications/{spec_id}
      */
-    @DeleteMapping("/api/admin/products/{product_id}/specifications/{spec_id}")
+    @DeleteMapping("/admin/products/{product_id}/specifications/{spec_id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> deleteSpecification(
             @PathVariable Long product_id,
@@ -274,7 +310,7 @@ public class ProductController {
      * Get All Products (Admin)
      * GET /api/admin/products
      */
-    @GetMapping("/api/admin/products")
+    @GetMapping("/admin/products")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<PagedApiResponse<ProductResponse>> getAllProductsAdmin(
             @RequestParam(defaultValue = "1") Integer page,
