@@ -1,0 +1,56 @@
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# IDE files
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+target/
+!target/*.jar
+build/
+*.class
+
+# Log files
+logs/
+*.log
+
+# Temporary files
+tmp/
+*.tmp
+*.bak
+*.swp
+*~
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Documentation
+*.md
+!README.md
+
+# Test files
+src/test/
+
+# Maven wrapper (optional - bỏ comment nếu không muốn include)
+# .mvn/
+# mvnw
+# mvnw.cmd
+
+# Node modules (nếu có frontend)
+node_modules/
+npm-debug.log*
+
+# Spring Boot dev tools restart trigger
+.reloadtrigger
