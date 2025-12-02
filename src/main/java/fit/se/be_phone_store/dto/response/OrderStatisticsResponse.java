@@ -62,7 +62,7 @@ public class OrderStatisticsResponse {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class DailyStat {
-        private LocalDate date;
+        private String date;
 
         @JsonProperty("orders_count")
         private Integer orders_count;

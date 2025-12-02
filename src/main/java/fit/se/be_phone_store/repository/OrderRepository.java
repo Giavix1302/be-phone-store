@@ -116,6 +116,17 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
            "ORDER BY DATE(o.createdAt) DESC")
     List<Object[]> getDailyOrderStatistics(@Param("startDate") LocalDateTime startDate);
     
+    // Daily order statistics with date range
+    @Query("SELECT FUNCTION('DATE', o.createdAt), COUNT(o), SUM(CASE WHEN o.status = 'DELIVERED' THEN o.totalAmount ELSE 0 END) " +
+           "FROM Order o " +
+           "WHERE o.createdAt BETWEEN :startDate AND :endDate " +
+           "GROUP BY FUNCTION('DATE', o.createdAt) " +
+           "ORDER BY FUNCTION('DATE', o.createdAt) ASC")
+    List<Object[]> getDailyOrderStatisticsByDateRange(
+        @Param("startDate") LocalDateTime startDate,
+        @Param("endDate") LocalDateTime endDate
+    );
+    
     // Orders by status count
     @Query("SELECT o.status, COUNT(o) FROM Order o GROUP BY o.status")
     List<Object[]> countOrdersByStatus();
@@ -128,4 +139,26 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     // Find orders needing shipping update
     @Query("SELECT o FROM Order o WHERE o.status = 'PROCESSING' AND o.createdAt < :date")
     List<Order> findOrdersNeedingShippingUpdate(@Param("date") LocalDateTime date);
+    
+    // Find orders with filters (Admin)
+    @Query("""
+        SELECT o FROM Order o
+        WHERE (:status IS NULL OR o.status = :status)
+          AND (:userId IS NULL OR o.user.id = :userId)
+          AND (:fromDate IS NULL OR o.createdAt >= :fromDate)
+          AND (:toDate IS NULL OR o.createdAt <= :toDate)
+          AND (:search IS NULL OR 
+               LOWER(o.orderNumber) LIKE LOWER(CONCAT('%', :search, '%')) OR
+               LOWER(o.user.fullName) LIKE LOWER(CONCAT('%', :search, '%')) OR
+               LOWER(o.user.email) LIKE LOWER(CONCAT('%', :search, '%')) OR
+               LOWER(o.user.phone) LIKE LOWER(CONCAT('%', :search, '%')))
+        """)
+    Page<Order> findOrdersWithFilters(
+        @Param("status") Order.OrderStatus status,
+        @Param("userId") Long userId,
+        @Param("fromDate") LocalDateTime fromDate,
+        @Param("toDate") LocalDateTime toDate,
+        @Param("search") String search,
+        Pageable pageable
+    );
 }

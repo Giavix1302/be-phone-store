@@ -67,6 +67,22 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
     List<Object[]> findProductsSoldInDateRange(@Param("startDate") LocalDateTime startDate,
                                               @Param("endDate") LocalDateTime endDate);
     
+    // Find top products by revenue in date range
+    @Query(value = "SELECT oi.product_id, p.name, SUM(oi.quantity) as quantitySold, SUM(oi.quantity * oi.unit_price) as revenue " +
+           "FROM order_items oi " +
+           "JOIN orders o ON oi.order_id = o.id " +
+           "JOIN products p ON oi.product_id = p.id " +
+           "WHERE o.status = 'DELIVERED' AND o.created_at BETWEEN :startDate AND :endDate " +
+           "GROUP BY oi.product_id, p.name " +
+           "ORDER BY revenue DESC " +
+           "LIMIT :limit",
+           nativeQuery = true)
+    List<Object[]> findTopProductsByRevenueInDateRange(
+        @Param("startDate") LocalDateTime startDate,
+        @Param("endDate") LocalDateTime endDate,
+        @Param("limit") int limit
+    );
+    
     // Calculate total quantity sold for a product
     @Query("SELECT COALESCE(SUM(oi.quantity), 0) FROM OrderItem oi " +
            "JOIN oi.order o " +

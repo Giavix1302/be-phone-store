@@ -49,7 +49,7 @@ public class AdminOrderListResponse {
         private String shipping_address;
 
         @JsonProperty("created_at")
-        private LocalDateTime created_at;
+        private String created_at;
     }
 
     @Data

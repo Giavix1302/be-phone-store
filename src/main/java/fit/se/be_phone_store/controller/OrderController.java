@@ -113,12 +113,11 @@ public class OrderController {
      * POST /api/orders/{order_number}/review
      */
     @PostMapping("/{order_number}/review")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> submitOrderReview(
+    public ResponseEntity<ApiResponse<SubmitOrderReviewResponse>> submitOrderReview(
             @PathVariable("order_number") String orderNumber,
             @Valid @RequestBody SubmitOrderReviewRequest request) {
         log.info("Submitting review for order: {}", orderNumber);
-        ApiResponse<Map<String, Object>> response = orderService.submitOrderReview(orderNumber, request);
-        response.setMessage("Đánh giá đơn hàng thành công");
+        ApiResponse<SubmitOrderReviewResponse> response = orderService.submitOrderReview(orderNumber, request);
         return ResponseEntity.ok(response);
     }
 
