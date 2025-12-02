@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  # Database service - MariaDB
+  db:
+    image: mariadb:10.11
+    container_name: phone-ecommerce-db
+    environment:
+      MARIADB_ROOT_PASSWORD: docker123
+      MARIADB_DATABASE: phone_ecommerce
+      MARIADB_CHARACTER_SET_SERVER: utf8mb4
+      MARIADB_COLLATE_SERVER: utf8mb4_unicode_ci
+    ports:
+      - "3308:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./sql-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - phone-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      timeout: 20s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # Application service
+  app:
+    build: .
+    container_name: phone-ecommerce-app
+    environment:
+      # Server Configuration
+      SERVER_PORT: 8080
+      SERVER_SERVLET_CONTEXT_PATH: /api
+      
+      # Database Configuration - ROOT USER
+      SPRING_DATASOURCE_URL: jdbc:mariadb://db:3306/phone_ecommerce?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: docker123
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.mariadb.jdbc.Driver
+      
+      # Connection Pool
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: 10
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: 2
+      SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: 20000
+      SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT: 300000
+      
+      # JPA/Hibernate Configuration
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_SHOW_SQL: "true"
+      SPRING_JPA_PROPERTIES_HIBERNATE_FORMAT_SQL: "true"
+      
+      # JWT Configuration
+      JWT_SECRET: myVerySecretKeyForPhoneEcommerceThatIsAtLeast32Characters
+      JWT_EXPIRATION: 86400000
+      JWT_REFRESH_EXPIRATION: 604800000
+      
+      # SendGrid Email Configuration
+      SENDGRID_API_KEY: 
+      SENDGRID_FROM_EMAIL: 
+      
+      # Cloudinary Configuration
+      CLOUDINARY_CLOUD_NAME: 
+      CLOUDINARY_API_KEY: 
+      CLOUDINARY_API_SECRET: 
+      CLOUDINARY_SECURE: "true"
+      CLOUDINARY_UPLOAD_FOLDER: phone-ecommerce/products
+      CLOUDINARY_UPLOAD_USE_FILENAME: "true"
+      CLOUDINARY_UPLOAD_UNIQUE_FILENAME: "true"
+      CLOUDINARY_UPLOAD_OVERWRITE: "false"
+      
+      # CORS Configuration
+      APP_CORS_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:8080
+      APP_CORS_ALLOWED_METHODS: GET,POST,PUT,DELETE,OPTIONS
+      APP_CORS_ALLOWED_HEADERS: Authorization,Content-Type,X-Requested-With,Accept,Origin
+      APP_CORS_EXPOSED_HEADERS: Authorization,Content-Type,X-Total-Count
+      APP_CORS_ALLOW_CREDENTIALS: "true"
+      APP_CORS_MAX_AGE: "3600"
+      
+      # Multipart Configuration
+      SPRING_SERVLET_MULTIPART_ENABLED: "true"
+      SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE: 10MB
+      SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE: 10MB
+      SPRING_SERVLET_MULTIPART_FILE_SIZE_THRESHOLD: 2KB
+      
+      # Logging Configuration
+      LOGGING_LEVEL_ROOT: INFO
+      LOGGING_LEVEL_FIT_SE_BE_PHONE_STORE: DEBUG
+      LOGGING_LEVEL_ORG_HIBERNATE_SQL: DEBUG
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - phone-network
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  db_data:
+
+networks:
+  phone-network:
+    driver: bridge
+
