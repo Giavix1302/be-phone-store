@@ -68,7 +68,21 @@ public class OrderService {
             throw new BadRequestException("Giỏ hàng trống, không thể tạo đơn hàng");
         }
 
-        // Validate cart items (stock, active products)
+        if (request.getCartItemIds() != null && !request.getCartItemIds().isEmpty()) {
+            List<Long> selectedIds = request.getCartItemIds();
+
+            List<CartItem> filteredItems = cartItems.stream()
+                    .filter(item -> selectedIds.contains(item.getId()))
+                    .collect(Collectors.toList());
+
+            if (filteredItems.isEmpty()) {
+                throw new BadRequestException("Không có sản phẩm hợp lệ được chọn trong giỏ hàng");
+            }
+
+            cartItems = filteredItems;
+        }
+
+
         List<OutOfStockResponse.OutOfStockItem> outOfStockItems = validateCartItems(cartItems);
         if (!outOfStockItems.isEmpty()) {
             OutOfStockResponse errorData = OutOfStockResponse.builder()
@@ -133,8 +147,12 @@ public class OrderService {
             productRepository.save(product);
         }
 
-        // Clear cart
-        cartItemRepository.deleteByCart(cart);
+
+        if (request.getCartItemIds() != null && !request.getCartItemIds().isEmpty()) {
+            cartItemRepository.deleteAll(cartItems);
+        } else {
+            cartItemRepository.deleteByCart(cart);
+        }
 
         // Build response data
         List<OrderCreatedResponse.OrderItemInfo> itemInfos = createdOrderItems.stream()

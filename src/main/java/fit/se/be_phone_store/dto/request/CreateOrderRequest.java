@@ -7,6 +7,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * CreateOrderRequest DTO for creating new orders
  */
@@ -26,6 +28,10 @@ public class CreateOrderRequest {
     @Size(max = 1000, message = "Notes must not exceed 1000 characters")
     private String note;
 
+
+    @JsonProperty("cart_item_ids")
+    private List<Long> cart_item_ids;
+
     // Backward compatibility
     public String getShippingAddress() {
         return shipping_address;
@@ -37,5 +43,9 @@ public class CreateOrderRequest {
 
     public String getNotes() {
         return note;
+    }
+
+    public List<Long> getCartItemIds() {
+        return cart_item_ids;
     }
 }
