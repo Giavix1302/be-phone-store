@@ -18,6 +18,7 @@ import fit.se.be_phone_store.dto.response.UserStatisticsResponse;
 import fit.se.be_phone_store.dto.response.AvatarResponse;
 import fit.se.be_phone_store.dto.response.UpdateAvatarResponse;
 import fit.se.be_phone_store.dto.response.AdminUserListResponse;
+import fit.se.be_phone_store.dto.response.AdminUserDetailResponse;
 import fit.se.be_phone_store.exception.ResourceNotFoundException;
 import fit.se.be_phone_store.exception.UnauthorizedException;
 import fit.se.be_phone_store.exception.BadRequestException;
@@ -247,6 +248,107 @@ public class UserService {
                 .build();
 
         return ApiResponse.success("Lấy danh sách users thành công", responseData);
+    }
+
+    /**
+     * Get user detail with statistics, orders, and reviews (Admin only)
+     * @param userId User ID
+     * @return API response with user detail
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<AdminUserDetailResponse> getUserDetailAdmin(Long userId) {
+        log.info("Getting user detail (Admin) for user ID: {}", userId);
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        List<Order> userOrders = orderRepository.findByUserId(userId);
+ 
+        List<Review> userReviews = reviewRepository.findByUserIdWithProduct(userId);
+
+        AdminUserDetailResponse.UserInfo userInfo = AdminUserDetailResponse.UserInfo.builder()
+                .id(user.getId())
+                .email(user.getEmail())
+                .fullName(user.getFullName())
+                .phone(user.getPhone())
+                .address(user.getAddress())
+                .avatar(user.getAvatar())
+                .role(user.getRole().name())
+                .enabled(user.getEnabled())
+                .createdAt(user.getCreatedAt())
+                .updatedAt(user.getUpdatedAt())
+                .lastLogin(user.getLastLoginAt())
+                .build();
+
+        int totalOrders = userOrders.size();
+        int completedOrders = (int) userOrders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                .count();
+        int cancelledOrders = (int) userOrders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.CANCELLED)
+                .count();
+
+        BigDecimal totalSpent = userOrders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                .map(Order::getTotalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal averageOrderValue = completedOrders > 0
+                ? totalSpent.divide(BigDecimal.valueOf(completedOrders), 2, java.math.RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        int totalReviews = userReviews.size();
+        double averageRating = userReviews.stream()
+                .mapToInt(Review::getRating)
+                .average()
+                .orElse(0.0);
+
+        AdminUserDetailResponse.StatisticsInfo statistics = AdminUserDetailResponse.StatisticsInfo.builder()
+                .totalOrders(totalOrders)
+                .completedOrders(completedOrders)
+                .cancelledOrders(cancelledOrders)
+                .totalSpent(totalSpent)
+                .averageOrderValue(averageOrderValue)
+                .totalReviews(totalReviews)
+                .averageRating(Math.round(averageRating * 10.0) / 10.0) 
+                .build();
+
+        List<AdminUserDetailResponse.RecentOrder> recentOrders = userOrders.stream()
+                .sorted((o1, o2) -> o2.getCreatedAt().compareTo(o1.getCreatedAt()))
+                .limit(5)
+                .map(order -> AdminUserDetailResponse.RecentOrder.builder()
+                        .id(order.getId())
+                        .orderNumber(order.getOrderNumber())
+                        .totalAmount(order.getTotalAmount())
+                        .status(order.getStatus().name())
+                        .createdAt(order.getCreatedAt())
+                        .build())
+                .collect(Collectors.toList());
+
+        List<AdminUserDetailResponse.RecentReview> recentReviews = userReviews.stream()
+                .sorted((r1, r2) -> r2.getCreatedAt().compareTo(r1.getCreatedAt()))
+                .limit(5)
+                .map(review -> AdminUserDetailResponse.RecentReview.builder()
+                        .id(review.getId())
+                        .productName(review.getProduct() != null ? review.getProduct().getName() : "N/A")
+                        .rating(review.getRating())
+                        .comment(review.getComment())
+                        .createdAt(review.getCreatedAt())
+                        .build())
+                .collect(Collectors.toList());
+
+        AdminUserDetailResponse responseData = AdminUserDetailResponse.builder()
+                .userInfo(userInfo)
+                .statistics(statistics)
+                .recentOrders(recentOrders)
+                .recentReviews(recentReviews)
+                .build();
+
+        return ApiResponse.success("Lấy chi tiết user thành công", responseData);
     }
 
     /**

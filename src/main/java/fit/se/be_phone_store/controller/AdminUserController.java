@@ -2,6 +2,7 @@ package fit.se.be_phone_store.controller;
 
 import fit.se.be_phone_store.dto.response.ApiResponse;
 import fit.se.be_phone_store.dto.response.AdminUserListResponse;
+import fit.se.be_phone_store.dto.response.AdminUserDetailResponse;
 import fit.se.be_phone_store.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +45,20 @@ public class AdminUserController {
         ApiResponse<AdminUserListResponse> response = userService.getAllUsersAdmin(
                 page, limit, role, enabled, from_date, to_date, sort_by, sort_order);
         response.setMessage("Lấy danh sách users thành công");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get user detail (Admin)
+     * GET /api/admin/users/{user_id}
+     */
+    @GetMapping("/{user_id}")
+    public ResponseEntity<ApiResponse<AdminUserDetailResponse>> getUserDetail(
+            @PathVariable("user_id") Long userId) {
+        log.info("Getting user detail (Admin) for user ID: {}", userId);
+
+        ApiResponse<AdminUserDetailResponse> response = userService.getUserDetailAdmin(userId);
+        response.setMessage("Lấy chi tiết user thành công");
         return ResponseEntity.ok(response);
     }
 }
