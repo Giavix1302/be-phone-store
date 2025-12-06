@@ -3,7 +3,10 @@ package fit.se.be_phone_store.controller;
 import fit.se.be_phone_store.dto.response.ApiResponse;
 import fit.se.be_phone_store.dto.response.AdminUserListResponse;
 import fit.se.be_phone_store.dto.response.AdminUserDetailResponse;
+import fit.se.be_phone_store.dto.response.UpdateUserStatusResponse;
+import fit.se.be_phone_store.dto.request.UpdateUserStatusRequest;
 import fit.se.be_phone_store.service.UserService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -59,6 +62,21 @@ public class AdminUserController {
 
         ApiResponse<AdminUserDetailResponse> response = userService.getUserDetailAdmin(userId);
         response.setMessage("Lấy chi tiết user thành công");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Update user status (Admin)
+     * PATCH /api/admin/users/{user_id}/status
+     */
+    @PatchMapping("/{user_id}/status")
+    public ResponseEntity<ApiResponse<UpdateUserStatusResponse>> updateUserStatus(
+            @PathVariable("user_id") Long userId,
+            @Valid @RequestBody UpdateUserStatusRequest request) {
+        log.info("Updating user status (Admin) for user ID: {}, enabled: {}", userId, request.getEnabled());
+
+        ApiResponse<UpdateUserStatusResponse> response = userService.updateUserStatus(userId, request);
+        response.setMessage("Cập nhật trạng thái user thành công");
         return ResponseEntity.ok(response);
     }
 }

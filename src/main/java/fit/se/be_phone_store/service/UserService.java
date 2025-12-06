@@ -19,6 +19,8 @@ import fit.se.be_phone_store.dto.response.AvatarResponse;
 import fit.se.be_phone_store.dto.response.UpdateAvatarResponse;
 import fit.se.be_phone_store.dto.response.AdminUserListResponse;
 import fit.se.be_phone_store.dto.response.AdminUserDetailResponse;
+import fit.se.be_phone_store.dto.request.UpdateUserStatusRequest;
+import fit.se.be_phone_store.dto.response.UpdateUserStatusResponse;
 import fit.se.be_phone_store.exception.ResourceNotFoundException;
 import fit.se.be_phone_store.exception.UnauthorizedException;
 import fit.se.be_phone_store.exception.BadRequestException;
@@ -471,6 +473,65 @@ public class UserService {
         String message = enabled ? "User enabled successfully" : "User disabled successfully";
         log.info("User {} enabled status changed to: {}", userId, enabled);
         return ApiResponse.success(message);
+    }
+
+    /**
+     * Update user status with reason (Admin only)
+     * @param userId User ID
+     * @param request Update user status request
+     * @return API response with update details
+     */
+    public ApiResponse<UpdateUserStatusResponse> updateUserStatus(Long userId, UpdateUserStatusRequest request) {
+        log.info("Updating user {} status to: {}", userId, request.getEnabled());
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        Boolean oldStatus = user.getEnabled();
+        Boolean newStatus = request.getEnabled();
+
+        // Update enabled status
+        user.setEnabled(newStatus);
+
+        // Update note with reason if provided
+        if (request.getReason() != null && !request.getReason().trim().isEmpty()) {
+            String notePrefix = newStatus ? "Enabled: " : "Disabled: ";
+            String timestamp = LocalDateTime.now().toString();
+            String newNote = String.format("%s%s [%s]", notePrefix, request.getReason().trim(), timestamp);
+            
+            // Append to existing note if exists, otherwise set new note
+            if (user.getNote() != null && !user.getNote().isEmpty()) {
+                user.setNote(user.getNote() + "\n" + newNote);
+            } else {
+                user.setNote(newNote);
+            }
+        }
+
+        User updatedUser = userRepository.save(user);
+
+        // Get current admin user info
+        User currentAdmin = authService.getCurrentUser();
+
+        UpdateUserStatusResponse.UpdatedByInfo updatedBy = UpdateUserStatusResponse.UpdatedByInfo.builder()
+                .id(currentAdmin.getId())
+                .fullName(currentAdmin.getFullName())
+                .build();
+
+        UpdateUserStatusResponse responseData = UpdateUserStatusResponse.builder()
+                .userId(updatedUser.getId())
+                .oldStatus(oldStatus)
+                .newStatus(newStatus)
+                .reason(request.getReason())
+                .updatedBy(updatedBy)
+                .updatedAt(updatedUser.getUpdatedAt())
+                .build();
+
+        log.info("User {} status updated from {} to {}", userId, oldStatus, newStatus);
+        return ApiResponse.success("Cập nhật trạng thái user thành công", responseData);
     }
 
     /**
