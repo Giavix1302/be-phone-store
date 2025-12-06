@@ -152,4 +152,36 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
            "JOIN oi.order o " +
            "WHERE oi.product.id = :productId AND o.user.id = :userId AND o.status = 'DELIVERED'")
     LocalDateTime findFirstPurchaseDate(@Param("userId") Long userId, @Param("productId") Long productId);
+
+    @Query("SELECT oi.product.category.name, SUM(oi.quantity * oi.unitPrice) as revenue " +
+           "FROM OrderItem oi " +
+           "JOIN oi.order o " +
+           "WHERE o.status = 'DELIVERED' AND o.createdAt BETWEEN :startDate AND :endDate " +
+           "AND oi.product.category IS NOT NULL " +
+           "GROUP BY oi.product.category.name " +
+           "ORDER BY revenue DESC")
+    List<Object[]> findRevenueByCategoryInDateRange(
+        @Param("startDate") LocalDateTime startDate,
+        @Param("endDate") LocalDateTime endDate
+    );
+    
+    // Find best selling products with full details (all time)
+    @Query("SELECT oi.product.id, oi.product.name, SUM(oi.quantity) as quantitySold, " +
+           "SUM(oi.quantity * oi.unitPrice) as revenue, oi.product.stockQuantity " +
+           "FROM OrderItem oi " +
+           "JOIN oi.order o " +
+           "WHERE o.status = 'DELIVERED' " +
+           "GROUP BY oi.product.id, oi.product.name, oi.product.stockQuantity " +
+           "ORDER BY quantitySold DESC")
+    List<Object[]> findBestSellingProductsWithDetails();
+    
+    // Find category performance (all time) - products sold and revenue
+    @Query("SELECT oi.product.category.name, " +
+           "SUM(oi.quantity) as productsSold, SUM(oi.quantity * oi.unitPrice) as revenue " +
+           "FROM OrderItem oi " +
+           "JOIN oi.order o " +
+           "WHERE o.status = 'DELIVERED' AND oi.product.category IS NOT NULL " +
+           "GROUP BY oi.product.category.name " +
+           "ORDER BY revenue DESC")
+    List<Object[]> findCategoryPerformance();
 }

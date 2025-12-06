@@ -22,6 +22,7 @@ import fit.se.be_phone_store.dto.response.AdminUserDetailResponse;
 import fit.se.be_phone_store.dto.request.UpdateUserStatusRequest;
 import fit.se.be_phone_store.dto.response.UpdateUserStatusResponse;
 import fit.se.be_phone_store.dto.response.UserOrderHistoryResponse;
+import fit.se.be_phone_store.dto.response.UserStatisticsAdminResponse;
 import fit.se.be_phone_store.exception.ResourceNotFoundException;
 import fit.se.be_phone_store.exception.UnauthorizedException;
 import fit.se.be_phone_store.exception.BadRequestException;
@@ -495,16 +496,25 @@ public class UserService {
         Boolean oldStatus = user.getEnabled();
         Boolean newStatus = request.getEnabled();
 
+        if (!newStatus && user.getRole() == User.Role.ADMIN) {
+            long adminCount = userRepository.countByRole(User.Role.ADMIN);
+            long enabledAdminCount = userRepository.findByRole(User.Role.ADMIN).stream()
+                    .filter(u -> u.getEnabled() != null && u.getEnabled())
+                    .count();
+            
+            if (enabledAdminCount <= 1 && oldStatus) {
+                throw new BadRequestException("Không thể vô hiệu hóa admin user cuối cùng");
+            }
+        }
+
         // Update enabled status
         user.setEnabled(newStatus);
 
-        // Update note with reason if provided
         if (request.getReason() != null && !request.getReason().trim().isEmpty()) {
             String notePrefix = newStatus ? "Enabled: " : "Disabled: ";
             String timestamp = LocalDateTime.now().toString();
             String newNote = String.format("%s%s [%s]", notePrefix, request.getReason().trim(), timestamp);
             
-            // Append to existing note if exists, otherwise set new note
             if (user.getNote() != null && !user.getNote().isEmpty()) {
                 user.setNote(user.getNote() + "\n" + newNote);
             } else {
@@ -610,6 +620,159 @@ public class UserService {
                 .build();
 
         return ApiResponse.success("Lấy lịch sử đơn hàng thành công", responseData);
+    }
+
+    /**
+     * Get user statistics (Admin only)
+     * @param period Period: today, week, month, year, custom
+     * @param fromDate Start date for custom period
+     * @param toDate End date for custom period
+     * @return API response with user statistics
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<UserStatisticsAdminResponse> getUserStatisticsAdmin(
+            String period, LocalDate fromDate, LocalDate toDate) {
+        log.info("Getting user statistics (Admin) - period: {}", period);
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        LocalDate now = LocalDate.now();
+        LocalDate periodStart;
+        LocalDate periodEnd = now;
+
+        if (fromDate != null && toDate != null) {
+            periodStart = fromDate;
+            periodEnd = toDate;
+            period = "custom";
+        } else {
+            switch (period.toLowerCase()) {
+                case "today":
+                    periodStart = now;
+                    periodEnd = now;
+                    break;
+                case "week":
+                    periodStart = now.minusWeeks(1);
+                    break;
+                case "month":
+                    periodStart = now.minusMonths(1);
+                    break;
+                case "year":
+                    periodStart = now.minusYears(1);
+                    break;
+                default:
+                    periodStart = now.minusMonths(1);
+                    period = "month";
+            }
+        }
+
+        LocalDateTime periodStartDateTime = periodStart.atStartOfDay();
+        LocalDateTime periodEndDateTime = periodEnd.atTime(23, 59, 59);
+
+        long periodDays = java.time.temporal.ChronoUnit.DAYS.between(periodStart, periodEnd) + 1;
+        LocalDate previousPeriodStart = periodStart.minusDays(periodDays);
+        LocalDate previousPeriodEnd = periodStart.minusDays(1);
+        LocalDateTime previousPeriodStartDateTime = previousPeriodStart.atStartOfDay();
+        LocalDateTime previousPeriodEndDateTime = previousPeriodEnd.atTime(23, 59, 59);
+
+        long totalUsers = userRepository.count();
+        long activeUsers = userRepository.countByEnabled(true);
+        long disabledUsers = userRepository.countByEnabled(false);
+        long newRegistrations = userRepository.countByCreatedAtBetween(periodStartDateTime, periodEndDateTime);
+        long usersWithOrders = userRepository.findUsersWithOrders().size();
+
+        UserStatisticsAdminResponse.OverviewInfo overview = UserStatisticsAdminResponse.OverviewInfo.builder()
+                .totalUsers(totalUsers)
+                .activeUsers(activeUsers)
+                .disabledUsers(disabledUsers)
+                .newRegistrations(newRegistrations)
+                .usersWithOrders(usersWithOrders)
+                .build();
+
+        long newUsersThisPeriod = newRegistrations;
+        long newUsersPreviousPeriod = userRepository.countByCreatedAtBetween(
+                previousPeriodStartDateTime, previousPeriodEndDateTime);
+        
+        double growthRate = 0.0;
+        if (newUsersPreviousPeriod > 0) {
+            growthRate = ((double) (newUsersThisPeriod - newUsersPreviousPeriod) / newUsersPreviousPeriod) * 100.0;
+            growthRate = Math.round(growthRate * 10.0) / 10.0; 
+        } else if (newUsersThisPeriod > 0) {
+            growthRate = 100.0; 
+        }
+
+        UserStatisticsAdminResponse.GrowthStatsInfo growthStats = UserStatisticsAdminResponse.GrowthStatsInfo.builder()
+                .newUsersThisPeriod(newUsersThisPeriod)
+                .newUsersPreviousPeriod(newUsersPreviousPeriod)
+                .growthRate(growthRate)
+                .build();
+
+        List<Object[]> dailyRegistrationsData = userRepository.getDailyRegistrations(
+                periodStartDateTime, periodEndDateTime);
+        
+        List<UserStatisticsAdminResponse.DailyRegistration> dailyRegistrations = dailyRegistrationsData.stream()
+                .map(data -> {
+                    LocalDate date;
+                    if (data[0] instanceof java.sql.Date) {
+                        date = ((java.sql.Date) data[0]).toLocalDate();
+                    } else if (data[0] instanceof java.time.LocalDate) {
+                        date = (LocalDate) data[0];
+                    } else if (data[0] instanceof java.util.Date) {
+                        date = ((java.util.Date) data[0]).toInstant()
+                                .atZone(java.time.ZoneId.systemDefault())
+                                .toLocalDate();
+                    } else {
+                        date = LocalDate.parse(data[0].toString());
+                    }
+                    
+                    Integer userCount = ((Number) data[1]).intValue();
+                    
+                    return UserStatisticsAdminResponse.DailyRegistration.builder()
+                            .date(date.toString())
+                            .newUsers(userCount)
+                            .build();
+                })
+                .collect(Collectors.toList());
+
+        List<User> allUsers = userRepository.findAll();
+        List<UserStatisticsAdminResponse.TopCustomer> topCustomers = allUsers.stream()
+                .map(user -> {
+                    List<Order> userOrders = orderRepository.findByUserId(user.getId());
+                    BigDecimal totalSpent = userOrders.stream()
+                            .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                            .map(Order::getTotalAmount)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    
+                    return new java.util.AbstractMap.SimpleEntry<>(user, 
+                            new java.util.AbstractMap.SimpleEntry<>(totalSpent, userOrders.size()));
+                })
+                .filter(entry -> entry.getValue().getKey().compareTo(BigDecimal.ZERO) > 0)
+                .sorted((e1, e2) -> e2.getValue().getKey().compareTo(e1.getValue().getKey()))
+                .limit(10)
+                .map(entry -> {
+                    User user = entry.getKey();
+                    BigDecimal totalSpent = entry.getValue().getKey();
+                    Integer totalOrders = entry.getValue().getValue();
+                    
+                    return UserStatisticsAdminResponse.TopCustomer.builder()
+                            .userId(user.getId())
+                            .fullName(user.getFullName())
+                            .totalSpent(totalSpent)
+                            .totalOrders(totalOrders)
+                            .build();
+                })
+                .collect(Collectors.toList());
+
+        UserStatisticsAdminResponse responseData = UserStatisticsAdminResponse.builder()
+                .period(period)
+                .overview(overview)
+                .growthStats(growthStats)
+                .dailyRegistrations(dailyRegistrations)
+                .topCustomers(topCustomers)
+                .build();
+
+        return ApiResponse.success("Lấy thống kê users thành công", responseData);
     }
 
     /**

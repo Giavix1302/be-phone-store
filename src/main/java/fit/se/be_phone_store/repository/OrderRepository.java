@@ -131,6 +131,75 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Query("SELECT o.status, COUNT(o) FROM Order o GROUP BY o.status")
     List<Object[]> countOrdersByStatus();
     
+    // Daily orders with status breakdown
+    @Query("""
+        SELECT FUNCTION('DATE', o.createdAt), 
+               COUNT(o), 
+               SUM(CASE WHEN o.status = 'DELIVERED' THEN 1 ELSE 0 END),
+               SUM(CASE WHEN o.status = 'CANCELLED' THEN 1 ELSE 0 END)
+        FROM Order o
+        WHERE o.createdAt BETWEEN :startDate AND :endDate
+        GROUP BY FUNCTION('DATE', o.createdAt)
+        ORDER BY FUNCTION('DATE', o.createdAt) ASC
+        """)
+    List<Object[]> getDailyOrdersWithStatus(
+        @Param("startDate") LocalDateTime startDate,
+        @Param("endDate") LocalDateTime endDate
+    );
+    
+    // Daily revenue for charts
+    @Query("""
+        SELECT FUNCTION('DATE', o.createdAt), 
+               SUM(CASE WHEN o.status = 'DELIVERED' THEN o.totalAmount ELSE 0 END)
+        FROM Order o
+        WHERE o.createdAt BETWEEN :startDate AND :endDate
+        GROUP BY FUNCTION('DATE', o.createdAt)
+        ORDER BY FUNCTION('DATE', o.createdAt) ASC
+        """)
+    List<Object[]> getDailyRevenueForCharts(
+        @Param("startDate") LocalDateTime startDate,
+        @Param("endDate") LocalDateTime endDate
+    );
+    
+    // Daily orders count for charts
+    @Query("""
+        SELECT FUNCTION('DATE', o.createdAt), 
+               COUNT(o)
+        FROM Order o
+        WHERE o.createdAt BETWEEN :startDate AND :endDate
+        GROUP BY FUNCTION('DATE', o.createdAt)
+        ORDER BY FUNCTION('DATE', o.createdAt) ASC
+        """)
+    List<Object[]> getDailyOrdersForCharts(
+        @Param("startDate") LocalDateTime startDate,
+        @Param("endDate") LocalDateTime endDate
+    );
+    
+    // Orders by hour (peak hours) - UTC timezone
+    @Query("""
+        SELECT FUNCTION('HOUR', o.createdAt), COUNT(o)
+        FROM Order o
+        WHERE o.createdAt BETWEEN :startDate AND :endDate
+        GROUP BY FUNCTION('HOUR', o.createdAt)
+        ORDER BY COUNT(o) DESC
+        """)
+    List<Object[]> getOrdersByHour(
+        @Param("startDate") LocalDateTime startDate,
+        @Param("endDate") LocalDateTime endDate
+    );
+    
+    // Count orders by status in date range
+    @Query("""
+        SELECT o.status, COUNT(o)
+        FROM Order o
+        WHERE o.createdAt BETWEEN :startDate AND :endDate
+        GROUP BY o.status
+        """)
+    List<Object[]> countOrdersByStatusInDateRange(
+        @Param("startDate") LocalDateTime startDate,
+        @Param("endDate") LocalDateTime endDate
+    );
+    
     // Check if user has any orders
     boolean existsByUser(User user);
     

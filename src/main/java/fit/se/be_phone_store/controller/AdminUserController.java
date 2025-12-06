@@ -5,6 +5,7 @@ import fit.se.be_phone_store.dto.response.AdminUserListResponse;
 import fit.se.be_phone_store.dto.response.AdminUserDetailResponse;
 import fit.se.be_phone_store.dto.response.UpdateUserStatusResponse;
 import fit.se.be_phone_store.dto.response.UserOrderHistoryResponse;
+import fit.se.be_phone_store.dto.response.UserStatisticsAdminResponse;
 import fit.se.be_phone_store.dto.request.UpdateUserStatusRequest;
 import fit.se.be_phone_store.service.UserService;
 import jakarta.validation.Valid;
@@ -96,6 +97,23 @@ public class AdminUserController {
 
         ApiResponse<UserOrderHistoryResponse> response = userService.getUserOrderHistory(userId, page, limit, status);
         response.setMessage("Lấy lịch sử đơn hàng thành công");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get user statistics (Admin)
+     * GET /api/admin/users/statistics
+     */
+    @GetMapping("/statistics")
+    public ResponseEntity<ApiResponse<UserStatisticsAdminResponse>> getUserStatistics(
+            @RequestParam(defaultValue = "month") String period,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from_date,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to_date) {
+        log.info("Getting user statistics (Admin) - period: {}, from_date: {}, to_date: {}", 
+                period, from_date, to_date);
+
+        ApiResponse<UserStatisticsAdminResponse> response = userService.getUserStatisticsAdmin(period, from_date, to_date);
+        response.setMessage("Lấy thống kê users thành công");
         return ResponseEntity.ok(response);
     }
 }
