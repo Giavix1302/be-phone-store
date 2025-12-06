@@ -4,6 +4,7 @@ import fit.se.be_phone_store.dto.response.ApiResponse;
 import fit.se.be_phone_store.dto.response.AdminUserListResponse;
 import fit.se.be_phone_store.dto.response.AdminUserDetailResponse;
 import fit.se.be_phone_store.dto.response.UpdateUserStatusResponse;
+import fit.se.be_phone_store.dto.response.UserOrderHistoryResponse;
 import fit.se.be_phone_store.dto.request.UpdateUserStatusRequest;
 import fit.se.be_phone_store.service.UserService;
 import jakarta.validation.Valid;
@@ -77,6 +78,24 @@ public class AdminUserController {
 
         ApiResponse<UpdateUserStatusResponse> response = userService.updateUserStatus(userId, request);
         response.setMessage("Cập nhật trạng thái user thành công");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Get user order history (Admin)
+     * GET /api/admin/users/{user_id}/orders
+     */
+    @GetMapping("/{user_id}/orders")
+    public ResponseEntity<ApiResponse<UserOrderHistoryResponse>> getUserOrderHistory(
+            @PathVariable("user_id") Long userId,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "10") int limit,
+            @RequestParam(required = false) String status) {
+        log.info("Getting user order history (Admin) for user ID: {}, page: {}, limit: {}, status: {}", 
+                userId, page, limit, status);
+
+        ApiResponse<UserOrderHistoryResponse> response = userService.getUserOrderHistory(userId, page, limit, status);
+        response.setMessage("Lấy lịch sử đơn hàng thành công");
         return ResponseEntity.ok(response);
     }
 }

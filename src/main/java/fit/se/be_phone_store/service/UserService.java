@@ -21,6 +21,7 @@ import fit.se.be_phone_store.dto.response.AdminUserListResponse;
 import fit.se.be_phone_store.dto.response.AdminUserDetailResponse;
 import fit.se.be_phone_store.dto.request.UpdateUserStatusRequest;
 import fit.se.be_phone_store.dto.response.UpdateUserStatusResponse;
+import fit.se.be_phone_store.dto.response.UserOrderHistoryResponse;
 import fit.se.be_phone_store.exception.ResourceNotFoundException;
 import fit.se.be_phone_store.exception.UnauthorizedException;
 import fit.se.be_phone_store.exception.BadRequestException;
@@ -532,6 +533,83 @@ public class UserService {
 
         log.info("User {} status updated from {} to {}", userId, oldStatus, newStatus);
         return ApiResponse.success("Cập nhật trạng thái user thành công", responseData);
+    }
+
+    /**
+     * Get user order history (Admin only)
+     * @param userId User ID
+     * @param page Page number (1-based)
+     * @param limit Items per page
+     * @param status Filter by order status
+     * @return API response with user order history
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<UserOrderHistoryResponse> getUserOrderHistory(Long userId, int page, int limit, String status) {
+        log.info("Getting user order history (Admin) for user ID: {}, page: {}, limit: {}, status: {}", 
+                userId, page, limit, status);
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        List<Order> userOrders;
+        if (status != null && !status.isEmpty()) {
+            try {
+                Order.OrderStatus orderStatus = Order.OrderStatus.valueOf(status.toUpperCase());
+                userOrders = orderRepository.findByUserIdAndStatus(userId, orderStatus);
+            } catch (IllegalArgumentException e) {
+                throw new BadRequestException("Invalid status: " + status);
+            }
+        } else {
+            userOrders = orderRepository.findByUserId(userId);
+        }
+
+        userOrders.sort((o1, o2) -> o2.getCreatedAt().compareTo(o1.getCreatedAt()));
+
+        int start = (page - 1) * limit;
+        int end = Math.min(start + limit, userOrders.size());
+        List<Order> pagedOrders = start < userOrders.size() 
+                ? userOrders.subList(start, end) 
+                : new ArrayList<>();
+
+        List<UserOrderHistoryResponse.OrderInfo> orderInfos = pagedOrders.stream()
+                .map(order -> {
+                    int itemsCount = orderItemRepository.countByOrderId(order.getId()).intValue();
+                    
+                    return UserOrderHistoryResponse.OrderInfo.builder()
+                            .id(order.getId())
+                            .orderNumber(order.getOrderNumber())
+                            .totalAmount(order.getTotalAmount())
+                            .status(order.getStatus().name())
+                            .itemsCount(itemsCount)
+                            .createdAt(order.getCreatedAt())
+                            .build();
+                })
+                .collect(Collectors.toList());
+
+        UserOrderHistoryResponse.UserInfo userInfo = UserOrderHistoryResponse.UserInfo.builder()
+                .id(user.getId())
+                .fullName(user.getFullName())
+                .email(user.getEmail())
+                .build();
+
+        UserOrderHistoryResponse.PaginationInfo pagination = UserOrderHistoryResponse.PaginationInfo.builder()
+                .currentPage(page)
+                .totalPages((int) Math.ceil((double) userOrders.size() / limit))
+                .totalItems((long) userOrders.size())
+                .itemsPerPage(limit)
+                .build();
+
+        UserOrderHistoryResponse responseData = UserOrderHistoryResponse.builder()
+                .user(userInfo)
+                .orders(orderInfos)
+                .pagination(pagination)
+                .build();
+
+        return ApiResponse.success("Lấy lịch sử đơn hàng thành công", responseData);
     }
 
     /**
