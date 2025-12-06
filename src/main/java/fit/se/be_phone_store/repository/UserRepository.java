@@ -50,4 +50,21 @@ public interface UserRepository extends JpaRepository<User, Long> {
     // Find users with reviews
     @Query("SELECT DISTINCT u FROM User u WHERE u.id IN (SELECT r.user.id FROM Review r)")
     List<User> findUsersWithReviews();
+    
+    // Find users with filters (Admin)
+    @Query("""
+        SELECT u FROM User u
+        WHERE (:role IS NULL OR u.role = :role)
+          AND (:enabled IS NULL OR u.enabled = :enabled)
+          AND (:fromDate IS NULL OR u.createdAt >= :fromDate)
+          AND (:toDate IS NULL OR u.createdAt <= :toDate)
+        """)
+    List<User> findUsersWithFilters(
+        @Param("role") User.Role role,
+        @Param("enabled") Boolean enabled,
+        @Param("fromDate") java.time.LocalDateTime fromDate,
+        @Param("toDate") java.time.LocalDateTime toDate
+    );
+    
+    long countByEnabled(Boolean enabled);
 }

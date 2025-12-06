@@ -17,6 +17,7 @@ import fit.se.be_phone_store.dto.response.UserProfileResponse;
 import fit.se.be_phone_store.dto.response.UserStatisticsResponse;
 import fit.se.be_phone_store.dto.response.AvatarResponse;
 import fit.se.be_phone_store.dto.response.UpdateAvatarResponse;
+import fit.se.be_phone_store.dto.response.AdminUserListResponse;
 import fit.se.be_phone_store.exception.ResourceNotFoundException;
 import fit.se.be_phone_store.exception.UnauthorizedException;
 import fit.se.be_phone_store.exception.BadRequestException;
@@ -26,16 +27,19 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.Collections;
+import java.util.ArrayList;
 
 /**
  * UserService - Handles user management business logic
@@ -138,6 +142,138 @@ public class UserService {
         Page<UserProfileResponse> profilesPage = usersPage.map(this::mapToUserProfileResponse);
 
         return PagedApiResponse.success("Users retrieved successfully", profilesPage);
+    }
+
+    /**
+     * Get all users with filters and statistics (Admin only)
+     * @param page Page number (1-based)
+     * @param limit Items per page
+     * @param role Filter by role
+     * @param enabled Filter by enabled status
+     * @param fromDate Filter from registration date
+     * @param toDate Filter to registration date
+     * @param sortBy Sort field
+     * @param sortOrder Sort order (asc/desc)
+     * @return API response with user list, pagination, and summary
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<AdminUserListResponse> getAllUsersAdmin(
+            int page, int limit, String role, Boolean enabled,
+            LocalDate fromDate, LocalDate toDate, String sortBy, String sortOrder) {
+        log.info("Getting all users (Admin) - page: {}, limit: {}, role: {}, enabled: {}", 
+                page, limit, role, enabled);
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        User.Role roleEnum = null;
+        if (role != null && !role.isEmpty()) {
+            try {
+                roleEnum = User.Role.valueOf(role.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new BadRequestException("Invalid role: " + role);
+            }
+        }
+
+        LocalDateTime fromDateTime = fromDate != null ? fromDate.atStartOfDay() : null;
+        LocalDateTime toDateTime = toDate != null ? toDate.atTime(23, 59, 59) : null;
+
+        List<User> filteredUsers = userRepository.findUsersWithFilters(
+                roleEnum, enabled, fromDateTime, toDateTime);
+
+        Sort.Direction direction = "asc".equalsIgnoreCase(sortOrder) 
+                ? Sort.Direction.ASC 
+                : Sort.Direction.DESC;
+        
+        if ("full_name".equalsIgnoreCase(sortBy)) {
+            filteredUsers.sort((u1, u2) -> {
+                String name1 = u1.getFullName() != null ? u1.getFullName() : "";
+                String name2 = u2.getFullName() != null ? u2.getFullName() : "";
+                int compare = name1.compareToIgnoreCase(name2);
+                return direction == Sort.Direction.ASC ? compare : -compare;
+            });
+        } else if ("email".equalsIgnoreCase(sortBy)) {
+            filteredUsers.sort((u1, u2) -> {
+                String email1 = u1.getEmail() != null ? u1.getEmail() : "";
+                String email2 = u2.getEmail() != null ? u2.getEmail() : "";
+                int compare = email1.compareToIgnoreCase(email2);
+                return direction == Sort.Direction.ASC ? compare : -compare;
+            });
+        } else {
+            filteredUsers.sort((u1, u2) -> {
+                LocalDateTime date1 = u1.getCreatedAt() != null ? u1.getCreatedAt() : LocalDateTime.MIN;
+                LocalDateTime date2 = u2.getCreatedAt() != null ? u2.getCreatedAt() : LocalDateTime.MIN;
+                int compare = date1.compareTo(date2);
+                return direction == Sort.Direction.ASC ? compare : -compare;
+            });
+        }
+
+        int start = (page - 1) * limit;
+        int end = Math.min(start + limit, filteredUsers.size());
+        List<User> pagedUsers = start < filteredUsers.size() 
+                ? filteredUsers.subList(start, end) 
+                : new ArrayList<>();
+
+        List<AdminUserListResponse.UserInfo> userInfos = pagedUsers.stream()
+                .map(this::mapToAdminUserInfo)
+                .collect(Collectors.toList());
+
+        AdminUserListResponse.PaginationInfo pagination = AdminUserListResponse.PaginationInfo.builder()
+                .currentPage(page)
+                .totalPages((int) Math.ceil((double) filteredUsers.size() / limit))
+                .totalItems((long) filteredUsers.size())
+                .itemsPerPage(limit)
+                .hasNext(end < filteredUsers.size())
+                .hasPrev(start > 0)
+                .build();
+
+        long totalUsers = userRepository.count();
+        long activeUsers = userRepository.countByEnabled(true);
+        long disabledUsers = userRepository.countByEnabled(false);
+        long totalAdmins = userRepository.countByRole(User.Role.ADMIN);
+
+        AdminUserListResponse.SummaryInfo summary = AdminUserListResponse.SummaryInfo.builder()
+                .totalUsers((int) totalUsers)
+                .activeUsers((int) activeUsers)
+                .disabledUsers((int) disabledUsers)
+                .totalAdmins((int) totalAdmins)
+                .build();
+
+        AdminUserListResponse responseData = AdminUserListResponse.builder()
+                .users(userInfos)
+                .pagination(pagination)
+                .summary(summary)
+                .build();
+
+        return ApiResponse.success("Lấy danh sách users thành công", responseData);
+    }
+
+    /**
+     * Map User entity to AdminUserInfo DTO with statistics
+     */
+    private AdminUserListResponse.UserInfo mapToAdminUserInfo(User user) {
+        List<Order> userOrders = orderRepository.findByUserId(user.getId());
+
+        int totalOrders = userOrders.size();
+
+        BigDecimal totalSpent = userOrders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                .map(Order::getTotalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return AdminUserListResponse.UserInfo.builder()
+                .id(user.getId())
+                .email(user.getEmail())
+                .fullName(user.getFullName())
+                .phone(user.getPhone())
+                .role(user.getRole().name())
+                .enabled(user.getEnabled())
+                .totalOrders(totalOrders)
+                .totalSpent(totalSpent)
+                .lastLogin(user.getLastLoginAt())
+                .createdAt(user.getCreatedAt())
+                .build();
     }
 
     /**
