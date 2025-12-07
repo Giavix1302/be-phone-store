@@ -26,7 +26,7 @@ public class Order {
     @Column(name = "order_number", nullable = false, unique = true)
     private String orderNumber;
 
-    @Column(name = "total_amount", nullable = false, precision = 10, scale = 2)
+    @Column(name = "total_amount", nullable = false, precision = 15, scale = 2)
     private BigDecimal totalAmount;
 
     @Enumerated(EnumType.STRING)

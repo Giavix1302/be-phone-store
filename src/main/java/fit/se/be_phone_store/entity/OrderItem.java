@@ -40,7 +40,9 @@ public class OrderItem {
     @JoinColumn(name = "color_id", nullable = false)
     private Color color; // Color selected when ordering
 
-    // Helper method
+    @Column(name = "is_reviewed", nullable = false)
+    private Boolean isReviewed = false; 
+
     public BigDecimal getTotalPrice() {
         return unitPrice.multiply(BigDecimal.valueOf(quantity));
     }

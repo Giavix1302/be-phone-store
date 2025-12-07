@@ -58,10 +58,18 @@ public class ProductService {
 
         Page<Product> productsPage;
 
-        // Apply filters
-        if (hasFilters(filters)) {
-            productsPage = productRepository.findProductsWithFilters(
-                    getCategoryIdFromName(filters.getCategory()),
+        boolean hasSearch = filters.getSearch() != null && !filters.getSearch().trim().isEmpty();
+        boolean hasFilters = filters.getCategoryId() != null || 
+                            filters.getBrandId() != null || 
+                            filters.getColorId() != null || 
+                            filters.getMinPrice() != null || 
+                            filters.getMaxPrice() != null || 
+                            filters.getInStock() != null;
+
+        if (hasSearch || hasFilters) {
+            productsPage = productRepository.findProductsWithFiltersAndSearch(
+                    hasSearch ? filters.getSearch() : null,
+                    filters.getCategoryId(),
                     filters.getBrandId(),
                     filters.getColorId(),
                     filters.getMinPrice(),
@@ -69,13 +77,6 @@ public class ProductService {
                     filters.getInStock(),
                     pageable
             );
-
-            // Apply search if needed
-            if (filters.getSearch() != null && !filters.getSearch().trim().isEmpty()) {
-                productsPage = productRepository.searchProducts(filters.getSearch(), pageable);
-            }
-        } else if (filters.getSearch() != null && !filters.getSearch().trim().isEmpty()) {
-            productsPage = productRepository.searchProducts(filters.getSearch(), pageable);
         } else {
             productsPage = productRepository.findByIsActiveTrue(pageable);
         }
