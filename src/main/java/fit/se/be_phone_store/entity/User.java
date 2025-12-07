@@ -55,6 +55,9 @@ public class User implements UserDetails {
     @Column(name = "enabled")
     private Boolean enabled = true;
 
+    @Column(name = "note", columnDefinition = "TEXT")
+    private String note;
+
     @Transient
     private LocalDateTime lastLoginAt;
 
@@ -169,6 +172,10 @@ public class User implements UserDetails {
         return enabled;
     }
 
+    public String getNote() {
+        return note;
+    }
+
     public LocalDateTime getLastLoginAt() {
         return lastLoginAt;
     }
@@ -232,6 +239,10 @@ public class User implements UserDetails {
 
     public void setEnabled(Boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public void setNote(String note) {
+        this.note = note;
     }
 
     public void setLastLoginAt(LocalDateTime lastLoginAt) {

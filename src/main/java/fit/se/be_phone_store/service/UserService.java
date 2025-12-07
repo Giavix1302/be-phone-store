@@ -17,6 +17,12 @@ import fit.se.be_phone_store.dto.response.UserProfileResponse;
 import fit.se.be_phone_store.dto.response.UserStatisticsResponse;
 import fit.se.be_phone_store.dto.response.AvatarResponse;
 import fit.se.be_phone_store.dto.response.UpdateAvatarResponse;
+import fit.se.be_phone_store.dto.response.AdminUserListResponse;
+import fit.se.be_phone_store.dto.response.AdminUserDetailResponse;
+import fit.se.be_phone_store.dto.request.UpdateUserStatusRequest;
+import fit.se.be_phone_store.dto.response.UpdateUserStatusResponse;
+import fit.se.be_phone_store.dto.response.UserOrderHistoryResponse;
+import fit.se.be_phone_store.dto.response.UserStatisticsAdminResponse;
 import fit.se.be_phone_store.exception.ResourceNotFoundException;
 import fit.se.be_phone_store.exception.UnauthorizedException;
 import fit.se.be_phone_store.exception.BadRequestException;
@@ -26,16 +32,19 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.Collections;
+import java.util.ArrayList;
 
 /**
  * UserService - Handles user management business logic
@@ -141,6 +150,239 @@ public class UserService {
     }
 
     /**
+     * Get all users with filters and statistics (Admin only)
+     * @param page Page number (1-based)
+     * @param limit Items per page
+     * @param role Filter by role
+     * @param enabled Filter by enabled status
+     * @param fromDate Filter from registration date
+     * @param toDate Filter to registration date
+     * @param sortBy Sort field
+     * @param sortOrder Sort order (asc/desc)
+     * @return API response with user list, pagination, and summary
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<AdminUserListResponse> getAllUsersAdmin(
+            int page, int limit, String role, Boolean enabled,
+            LocalDate fromDate, LocalDate toDate, String sortBy, String sortOrder) {
+        log.info("Getting all users (Admin) - page: {}, limit: {}, role: {}, enabled: {}", 
+                page, limit, role, enabled);
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        User.Role roleEnum = null;
+        if (role != null && !role.isEmpty()) {
+            try {
+                roleEnum = User.Role.valueOf(role.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new BadRequestException("Invalid role: " + role);
+            }
+        }
+
+        LocalDateTime fromDateTime = fromDate != null ? fromDate.atStartOfDay() : null;
+        LocalDateTime toDateTime = toDate != null ? toDate.atTime(23, 59, 59) : null;
+
+        List<User> filteredUsers = userRepository.findUsersWithFilters(
+                roleEnum, enabled, fromDateTime, toDateTime);
+
+        Sort.Direction direction = "asc".equalsIgnoreCase(sortOrder) 
+                ? Sort.Direction.ASC 
+                : Sort.Direction.DESC;
+        
+        if ("full_name".equalsIgnoreCase(sortBy)) {
+            filteredUsers.sort((u1, u2) -> {
+                String name1 = u1.getFullName() != null ? u1.getFullName() : "";
+                String name2 = u2.getFullName() != null ? u2.getFullName() : "";
+                int compare = name1.compareToIgnoreCase(name2);
+                return direction == Sort.Direction.ASC ? compare : -compare;
+            });
+        } else if ("email".equalsIgnoreCase(sortBy)) {
+            filteredUsers.sort((u1, u2) -> {
+                String email1 = u1.getEmail() != null ? u1.getEmail() : "";
+                String email2 = u2.getEmail() != null ? u2.getEmail() : "";
+                int compare = email1.compareToIgnoreCase(email2);
+                return direction == Sort.Direction.ASC ? compare : -compare;
+            });
+        } else {
+            filteredUsers.sort((u1, u2) -> {
+                LocalDateTime date1 = u1.getCreatedAt() != null ? u1.getCreatedAt() : LocalDateTime.MIN;
+                LocalDateTime date2 = u2.getCreatedAt() != null ? u2.getCreatedAt() : LocalDateTime.MIN;
+                int compare = date1.compareTo(date2);
+                return direction == Sort.Direction.ASC ? compare : -compare;
+            });
+        }
+
+        int start = (page - 1) * limit;
+        int end = Math.min(start + limit, filteredUsers.size());
+        List<User> pagedUsers = start < filteredUsers.size() 
+                ? filteredUsers.subList(start, end) 
+                : new ArrayList<>();
+
+        List<AdminUserListResponse.UserInfo> userInfos = pagedUsers.stream()
+                .map(this::mapToAdminUserInfo)
+                .collect(Collectors.toList());
+
+        AdminUserListResponse.PaginationInfo pagination = AdminUserListResponse.PaginationInfo.builder()
+                .currentPage(page)
+                .totalPages((int) Math.ceil((double) filteredUsers.size() / limit))
+                .totalItems((long) filteredUsers.size())
+                .itemsPerPage(limit)
+                .hasNext(end < filteredUsers.size())
+                .hasPrev(start > 0)
+                .build();
+
+        long totalUsers = userRepository.count();
+        long activeUsers = userRepository.countByEnabled(true);
+        long disabledUsers = userRepository.countByEnabled(false);
+        long totalAdmins = userRepository.countByRole(User.Role.ADMIN);
+
+        AdminUserListResponse.SummaryInfo summary = AdminUserListResponse.SummaryInfo.builder()
+                .totalUsers((int) totalUsers)
+                .activeUsers((int) activeUsers)
+                .disabledUsers((int) disabledUsers)
+                .totalAdmins((int) totalAdmins)
+                .build();
+
+        AdminUserListResponse responseData = AdminUserListResponse.builder()
+                .users(userInfos)
+                .pagination(pagination)
+                .summary(summary)
+                .build();
+
+        return ApiResponse.success("Lấy danh sách users thành công", responseData);
+    }
+
+    /**
+     * Get user detail with statistics, orders, and reviews (Admin only)
+     * @param userId User ID
+     * @return API response with user detail
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<AdminUserDetailResponse> getUserDetailAdmin(Long userId) {
+        log.info("Getting user detail (Admin) for user ID: {}", userId);
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        List<Order> userOrders = orderRepository.findByUserId(userId);
+ 
+        List<Review> userReviews = reviewRepository.findByUserIdWithProduct(userId);
+
+        AdminUserDetailResponse.UserInfo userInfo = AdminUserDetailResponse.UserInfo.builder()
+                .id(user.getId())
+                .email(user.getEmail())
+                .fullName(user.getFullName())
+                .phone(user.getPhone())
+                .address(user.getAddress())
+                .avatar(user.getAvatar())
+                .role(user.getRole().name())
+                .enabled(user.getEnabled())
+                .createdAt(user.getCreatedAt())
+                .updatedAt(user.getUpdatedAt())
+                .lastLogin(user.getLastLoginAt())
+                .build();
+
+        int totalOrders = userOrders.size();
+        int completedOrders = (int) userOrders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                .count();
+        int cancelledOrders = (int) userOrders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.CANCELLED)
+                .count();
+
+        BigDecimal totalSpent = userOrders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                .map(Order::getTotalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal averageOrderValue = completedOrders > 0
+                ? totalSpent.divide(BigDecimal.valueOf(completedOrders), 2, java.math.RoundingMode.HALF_UP)
+                : BigDecimal.ZERO;
+
+        int totalReviews = userReviews.size();
+        double averageRating = userReviews.stream()
+                .mapToInt(Review::getRating)
+                .average()
+                .orElse(0.0);
+
+        AdminUserDetailResponse.StatisticsInfo statistics = AdminUserDetailResponse.StatisticsInfo.builder()
+                .totalOrders(totalOrders)
+                .completedOrders(completedOrders)
+                .cancelledOrders(cancelledOrders)
+                .totalSpent(totalSpent)
+                .averageOrderValue(averageOrderValue)
+                .totalReviews(totalReviews)
+                .averageRating(Math.round(averageRating * 10.0) / 10.0) 
+                .build();
+
+        List<AdminUserDetailResponse.RecentOrder> recentOrders = userOrders.stream()
+                .sorted((o1, o2) -> o2.getCreatedAt().compareTo(o1.getCreatedAt()))
+                .limit(5)
+                .map(order -> AdminUserDetailResponse.RecentOrder.builder()
+                        .id(order.getId())
+                        .orderNumber(order.getOrderNumber())
+                        .totalAmount(order.getTotalAmount())
+                        .status(order.getStatus().name())
+                        .createdAt(order.getCreatedAt())
+                        .build())
+                .collect(Collectors.toList());
+
+        List<AdminUserDetailResponse.RecentReview> recentReviews = userReviews.stream()
+                .sorted((r1, r2) -> r2.getCreatedAt().compareTo(r1.getCreatedAt()))
+                .limit(5)
+                .map(review -> AdminUserDetailResponse.RecentReview.builder()
+                        .id(review.getId())
+                        .productName(review.getProduct() != null ? review.getProduct().getName() : "N/A")
+                        .rating(review.getRating())
+                        .comment(review.getComment())
+                        .createdAt(review.getCreatedAt())
+                        .build())
+                .collect(Collectors.toList());
+
+        AdminUserDetailResponse responseData = AdminUserDetailResponse.builder()
+                .userInfo(userInfo)
+                .statistics(statistics)
+                .recentOrders(recentOrders)
+                .recentReviews(recentReviews)
+                .build();
+
+        return ApiResponse.success("Lấy chi tiết user thành công", responseData);
+    }
+
+    /**
+     * Map User entity to AdminUserInfo DTO with statistics
+     */
+    private AdminUserListResponse.UserInfo mapToAdminUserInfo(User user) {
+        List<Order> userOrders = orderRepository.findByUserId(user.getId());
+
+        int totalOrders = userOrders.size();
+
+        BigDecimal totalSpent = userOrders.stream()
+                .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                .map(Order::getTotalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return AdminUserListResponse.UserInfo.builder()
+                .id(user.getId())
+                .email(user.getEmail())
+                .fullName(user.getFullName())
+                .phone(user.getPhone())
+                .role(user.getRole().name())
+                .enabled(user.getEnabled())
+                .totalOrders(totalOrders)
+                .totalSpent(totalSpent)
+                .lastLogin(user.getLastLoginAt())
+                .createdAt(user.getCreatedAt())
+                .build();
+    }
+
+    /**
      * Search users by keyword (Admin only)
      * @param keyword Search keyword
      * @param pageable Pagination parameters
@@ -233,6 +475,304 @@ public class UserService {
         String message = enabled ? "User enabled successfully" : "User disabled successfully";
         log.info("User {} enabled status changed to: {}", userId, enabled);
         return ApiResponse.success(message);
+    }
+
+    /**
+     * Update user status with reason (Admin only)
+     * @param userId User ID
+     * @param request Update user status request
+     * @return API response with update details
+     */
+    public ApiResponse<UpdateUserStatusResponse> updateUserStatus(Long userId, UpdateUserStatusRequest request) {
+        log.info("Updating user {} status to: {}", userId, request.getEnabled());
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        Boolean oldStatus = user.getEnabled();
+        Boolean newStatus = request.getEnabled();
+
+        if (!newStatus && user.getRole() == User.Role.ADMIN) {
+            long adminCount = userRepository.countByRole(User.Role.ADMIN);
+            long enabledAdminCount = userRepository.findByRole(User.Role.ADMIN).stream()
+                    .filter(u -> u.getEnabled() != null && u.getEnabled())
+                    .count();
+            
+            if (enabledAdminCount <= 1 && oldStatus) {
+                throw new BadRequestException("Không thể vô hiệu hóa admin user cuối cùng");
+            }
+        }
+
+        // Update enabled status
+        user.setEnabled(newStatus);
+
+        if (request.getReason() != null && !request.getReason().trim().isEmpty()) {
+            String notePrefix = newStatus ? "Enabled: " : "Disabled: ";
+            String timestamp = LocalDateTime.now().toString();
+            String newNote = String.format("%s%s [%s]", notePrefix, request.getReason().trim(), timestamp);
+            
+            if (user.getNote() != null && !user.getNote().isEmpty()) {
+                user.setNote(user.getNote() + "\n" + newNote);
+            } else {
+                user.setNote(newNote);
+            }
+        }
+
+        User updatedUser = userRepository.save(user);
+
+        // Get current admin user info
+        User currentAdmin = authService.getCurrentUser();
+
+        UpdateUserStatusResponse.UpdatedByInfo updatedBy = UpdateUserStatusResponse.UpdatedByInfo.builder()
+                .id(currentAdmin.getId())
+                .fullName(currentAdmin.getFullName())
+                .build();
+
+        UpdateUserStatusResponse responseData = UpdateUserStatusResponse.builder()
+                .userId(updatedUser.getId())
+                .oldStatus(oldStatus)
+                .newStatus(newStatus)
+                .reason(request.getReason())
+                .updatedBy(updatedBy)
+                .updatedAt(updatedUser.getUpdatedAt())
+                .build();
+
+        log.info("User {} status updated from {} to {}", userId, oldStatus, newStatus);
+        return ApiResponse.success("Cập nhật trạng thái user thành công", responseData);
+    }
+
+    /**
+     * Get user order history (Admin only)
+     * @param userId User ID
+     * @param page Page number (1-based)
+     * @param limit Items per page
+     * @param status Filter by order status
+     * @return API response with user order history
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<UserOrderHistoryResponse> getUserOrderHistory(Long userId, int page, int limit, String status) {
+        log.info("Getting user order history (Admin) for user ID: {}, page: {}, limit: {}, status: {}", 
+                userId, page, limit, status);
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        List<Order> userOrders;
+        if (status != null && !status.isEmpty()) {
+            try {
+                Order.OrderStatus orderStatus = Order.OrderStatus.valueOf(status.toUpperCase());
+                userOrders = orderRepository.findByUserIdAndStatus(userId, orderStatus);
+            } catch (IllegalArgumentException e) {
+                throw new BadRequestException("Invalid status: " + status);
+            }
+        } else {
+            userOrders = orderRepository.findByUserId(userId);
+        }
+
+        userOrders.sort((o1, o2) -> o2.getCreatedAt().compareTo(o1.getCreatedAt()));
+
+        int start = (page - 1) * limit;
+        int end = Math.min(start + limit, userOrders.size());
+        List<Order> pagedOrders = start < userOrders.size() 
+                ? userOrders.subList(start, end) 
+                : new ArrayList<>();
+
+        List<UserOrderHistoryResponse.OrderInfo> orderInfos = pagedOrders.stream()
+                .map(order -> {
+                    int itemsCount = orderItemRepository.countByOrderId(order.getId()).intValue();
+                    
+                    return UserOrderHistoryResponse.OrderInfo.builder()
+                            .id(order.getId())
+                            .orderNumber(order.getOrderNumber())
+                            .totalAmount(order.getTotalAmount())
+                            .status(order.getStatus().name())
+                            .itemsCount(itemsCount)
+                            .createdAt(order.getCreatedAt())
+                            .build();
+                })
+                .collect(Collectors.toList());
+
+        UserOrderHistoryResponse.UserInfo userInfo = UserOrderHistoryResponse.UserInfo.builder()
+                .id(user.getId())
+                .fullName(user.getFullName())
+                .email(user.getEmail())
+                .build();
+
+        UserOrderHistoryResponse.PaginationInfo pagination = UserOrderHistoryResponse.PaginationInfo.builder()
+                .currentPage(page)
+                .totalPages((int) Math.ceil((double) userOrders.size() / limit))
+                .totalItems((long) userOrders.size())
+                .itemsPerPage(limit)
+                .build();
+
+        UserOrderHistoryResponse responseData = UserOrderHistoryResponse.builder()
+                .user(userInfo)
+                .orders(orderInfos)
+                .pagination(pagination)
+                .build();
+
+        return ApiResponse.success("Lấy lịch sử đơn hàng thành công", responseData);
+    }
+
+    /**
+     * Get user statistics (Admin only)
+     * @param period Period: today, week, month, year, custom
+     * @param fromDate Start date for custom period
+     * @param toDate End date for custom period
+     * @return API response with user statistics
+     */
+    @Transactional(readOnly = true)
+    public ApiResponse<UserStatisticsAdminResponse> getUserStatisticsAdmin(
+            String period, LocalDate fromDate, LocalDate toDate) {
+        log.info("Getting user statistics (Admin) - period: {}", period);
+
+        if (!authService.isCurrentUserAdmin()) {
+            throw new UnauthorizedException("Admin access required");
+        }
+
+        LocalDate now = LocalDate.now();
+        LocalDate periodStart;
+        LocalDate periodEnd = now;
+
+        if (fromDate != null && toDate != null) {
+            periodStart = fromDate;
+            periodEnd = toDate;
+            period = "custom";
+        } else {
+            switch (period.toLowerCase()) {
+                case "today":
+                    periodStart = now;
+                    periodEnd = now;
+                    break;
+                case "week":
+                    periodStart = now.minusWeeks(1);
+                    break;
+                case "month":
+                    periodStart = now.minusMonths(1);
+                    break;
+                case "year":
+                    periodStart = now.minusYears(1);
+                    break;
+                default:
+                    periodStart = now.minusMonths(1);
+                    period = "month";
+            }
+        }
+
+        LocalDateTime periodStartDateTime = periodStart.atStartOfDay();
+        LocalDateTime periodEndDateTime = periodEnd.atTime(23, 59, 59);
+
+        long periodDays = java.time.temporal.ChronoUnit.DAYS.between(periodStart, periodEnd) + 1;
+        LocalDate previousPeriodStart = periodStart.minusDays(periodDays);
+        LocalDate previousPeriodEnd = periodStart.minusDays(1);
+        LocalDateTime previousPeriodStartDateTime = previousPeriodStart.atStartOfDay();
+        LocalDateTime previousPeriodEndDateTime = previousPeriodEnd.atTime(23, 59, 59);
+
+        long totalUsers = userRepository.count();
+        long activeUsers = userRepository.countByEnabled(true);
+        long disabledUsers = userRepository.countByEnabled(false);
+        long newRegistrations = userRepository.countByCreatedAtBetween(periodStartDateTime, periodEndDateTime);
+        long usersWithOrders = userRepository.findUsersWithOrders().size();
+
+        UserStatisticsAdminResponse.OverviewInfo overview = UserStatisticsAdminResponse.OverviewInfo.builder()
+                .totalUsers(totalUsers)
+                .activeUsers(activeUsers)
+                .disabledUsers(disabledUsers)
+                .newRegistrations(newRegistrations)
+                .usersWithOrders(usersWithOrders)
+                .build();
+
+        long newUsersThisPeriod = newRegistrations;
+        long newUsersPreviousPeriod = userRepository.countByCreatedAtBetween(
+                previousPeriodStartDateTime, previousPeriodEndDateTime);
+        
+        double growthRate = 0.0;
+        if (newUsersPreviousPeriod > 0) {
+            growthRate = ((double) (newUsersThisPeriod - newUsersPreviousPeriod) / newUsersPreviousPeriod) * 100.0;
+            growthRate = Math.round(growthRate * 10.0) / 10.0; 
+        } else if (newUsersThisPeriod > 0) {
+            growthRate = 100.0; 
+        }
+
+        UserStatisticsAdminResponse.GrowthStatsInfo growthStats = UserStatisticsAdminResponse.GrowthStatsInfo.builder()
+                .newUsersThisPeriod(newUsersThisPeriod)
+                .newUsersPreviousPeriod(newUsersPreviousPeriod)
+                .growthRate(growthRate)
+                .build();
+
+        List<Object[]> dailyRegistrationsData = userRepository.getDailyRegistrations(
+                periodStartDateTime, periodEndDateTime);
+        
+        List<UserStatisticsAdminResponse.DailyRegistration> dailyRegistrations = dailyRegistrationsData.stream()
+                .map(data -> {
+                    LocalDate date;
+                    if (data[0] instanceof java.sql.Date) {
+                        date = ((java.sql.Date) data[0]).toLocalDate();
+                    } else if (data[0] instanceof java.time.LocalDate) {
+                        date = (LocalDate) data[0];
+                    } else if (data[0] instanceof java.util.Date) {
+                        date = ((java.util.Date) data[0]).toInstant()
+                                .atZone(java.time.ZoneId.systemDefault())
+                                .toLocalDate();
+                    } else {
+                        date = LocalDate.parse(data[0].toString());
+                    }
+                    
+                    Integer userCount = ((Number) data[1]).intValue();
+                    
+                    return UserStatisticsAdminResponse.DailyRegistration.builder()
+                            .date(date.toString())
+                            .newUsers(userCount)
+                            .build();
+                })
+                .collect(Collectors.toList());
+
+        List<User> allUsers = userRepository.findAll();
+        List<UserStatisticsAdminResponse.TopCustomer> topCustomers = allUsers.stream()
+                .map(user -> {
+                    List<Order> userOrders = orderRepository.findByUserId(user.getId());
+                    BigDecimal totalSpent = userOrders.stream()
+                            .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                            .map(Order::getTotalAmount)
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+                    
+                    return new java.util.AbstractMap.SimpleEntry<>(user, 
+                            new java.util.AbstractMap.SimpleEntry<>(totalSpent, userOrders.size()));
+                })
+                .filter(entry -> entry.getValue().getKey().compareTo(BigDecimal.ZERO) > 0)
+                .sorted((e1, e2) -> e2.getValue().getKey().compareTo(e1.getValue().getKey()))
+                .limit(10)
+                .map(entry -> {
+                    User user = entry.getKey();
+                    BigDecimal totalSpent = entry.getValue().getKey();
+                    Integer totalOrders = entry.getValue().getValue();
+                    
+                    return UserStatisticsAdminResponse.TopCustomer.builder()
+                            .userId(user.getId())
+                            .fullName(user.getFullName())
+                            .totalSpent(totalSpent)
+                            .totalOrders(totalOrders)
+                            .build();
+                })
+                .collect(Collectors.toList());
+
+        UserStatisticsAdminResponse responseData = UserStatisticsAdminResponse.builder()
+                .period(period)
+                .overview(overview)
+                .growthStats(growthStats)
+                .dailyRegistrations(dailyRegistrations)
+                .topCustomers(topCustomers)
+                .build();
+
+        return ApiResponse.success("Lấy thống kê users thành công", responseData);
     }
 
     /**

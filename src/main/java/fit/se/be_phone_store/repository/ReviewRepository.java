@@ -43,6 +43,10 @@ public interface ReviewRepository extends JpaRepository<Review, Long>, JpaSpecif
     
     List<Review> findByUserId(Long userId);
     
+    // Find reviews by user with product loaded
+    @Query("SELECT r FROM Review r JOIN FETCH r.product WHERE r.user.id = :userId")
+    List<Review> findByUserIdWithProduct(@Param("userId") Long userId);
+    
     // Find specific user review for product
     Optional<Review> findByUserAndProduct(User user, Product product);
     
