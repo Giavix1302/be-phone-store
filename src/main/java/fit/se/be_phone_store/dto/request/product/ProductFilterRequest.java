@@ -9,7 +9,8 @@ import java.math.BigDecimal;
 public class ProductFilterRequest {
 
     private String search;
-    private String category;
+    private String category; 
+    private Long categoryId;
     private Long brandId;
     private Long colorId;
     private BigDecimal minPrice;
@@ -58,6 +59,14 @@ public class ProductFilterRequest {
 
     public void setCategory(String category) {
         this.category = category;
+    }
+
+    public Long getCategoryId() {
+        return categoryId;
+    }
+
+    public void setCategoryId(Long categoryId) {
+        this.categoryId = categoryId;
     }
 
     public Long getBrandId() {

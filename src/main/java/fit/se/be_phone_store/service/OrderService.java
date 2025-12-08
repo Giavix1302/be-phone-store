@@ -664,7 +664,7 @@ public class OrderService {
 
         for (SubmitOrderReviewRequest.ProductReview reviewRequest : request.getReviews()) {
             Long productId = reviewRequest.getProduct_id();
-            log.info("Processing review for product ID: {}", productId);
+            log.info("Processing review for product ID: {} in order {} by user {}", productId, orderNumber, userId);
 
             // Check if product is in order
             if (!orderProductIds.contains(productId)) {
@@ -676,49 +676,43 @@ public class OrderService {
             Product product = productRepository.findById(productId)
                 .orElseThrow(() -> new ResourceNotFoundException("Sản phẩm không tìm thấy"));
 
-            boolean reviewedInThisOrder = reviewRepository.existsByUserIdAndProductIdAndCreatedAtAfter(
-                userId, productId, orderDeliveredDate);
+            // Find all OrderItems for this product in this order
+            List<OrderItem> productOrderItems = orderItems.stream()
+                .filter(item -> item.getProduct().getId().equals(productId))
+                .collect(Collectors.toList());
             
-            if (reviewedInThisOrder) {
-                // Product already reviewed in this order - get existing review
-                Optional<Review> existingReview = reviewRepository.findByUserIdAndProductId(userId, productId);
-                
-                if (existingReview.isPresent()) {
-                    Review review = existingReview.get();
-                    log.info("Product {} already reviewed in order {} by user {}, review ID: {}", 
-                        productId, orderNumber, userId, review.getId());
-                    
-                    // Build response for already reviewed product
-                    SubmitOrderReviewResponse.ReviewedProduct reviewedProduct = SubmitOrderReviewResponse.ReviewedProduct.builder()
-                        .productId(product.getId())
-                        .productName(product.getName())
-                        .rating(review.getRating())
-                        .reviewId(review.getId())
-                        .status("already_reviewed")
-                        .message("Sản phẩm này đã được đánh giá trong đơn hàng này")
-                        .build();
-                    
-                    reviewedProducts.add(reviewedProduct);
-                    continue; // Skip creating new review
-                }
+            if (productOrderItems.isEmpty()) {
+                throw new ResourceNotFoundException("Không tìm thấy sản phẩm trong đơn hàng");
+            }
+            
+            OrderItem orderItem = productOrderItems.get(0); 
+
+            if (orderItem.getIsReviewed() != null && orderItem.getIsReviewed()) {
+                log.warn("Product {} already reviewed in order {} by user {} (is_reviewed = true)", 
+                    productId, orderNumber, userId);
+                throw new BadRequestException(
+                    String.format("Sản phẩm '%s' đã được đánh giá trong đơn hàng này. Không thể đánh giá lại.", 
+                        product.getName()));
             }
 
-            // Check if review exists from a different order (created before this order was delivered)
+
             Optional<Review> existingReview = reviewRepository.findByUserIdAndProductId(userId, productId);
             if (existingReview.isPresent()) {
                 Review oldReview = existingReview.get();
-                
-             
+
                 if (oldReview.getCreatedAt().isBefore(orderDeliveredDate)) {
-                    log.info("Product {} was reviewed in a different order, updating review ID {} for order {}", 
+                    log.info("Product {} was reviewed in a different order by same user, updating review ID {} for order {}", 
                         productId, oldReview.getId(), orderNumber);
                     
-                    // Update existing review
                     oldReview.setRating(reviewRequest.getRating());
                     oldReview.setComment(reviewRequest.getComment());
                     Review updatedReview = reviewRepository.save(oldReview);
                     
-                    // Build response for updated review
+                    for (OrderItem item : productOrderItems) {
+                        item.setIsReviewed(true);
+                        orderItemRepository.save(item);
+                    }
+                    
                     SubmitOrderReviewResponse.ReviewedProduct reviewedProduct = SubmitOrderReviewResponse.ReviewedProduct.builder()
                         .productId(product.getId())
                         .productName(product.getName())
@@ -733,7 +727,7 @@ public class OrderService {
                 }
             }
 
-            // Create new review (first time reviewing this product)
+            // Create new review (first time this user reviews this product)
             Review review = new Review();
             review.setUser(order.getUser());
             review.setProduct(product);
@@ -741,7 +735,12 @@ public class OrderService {
             review.setComment(reviewRequest.getComment());
 
             Review savedReview = reviewRepository.save(review);
-            log.info("Created review ID {} for product ID {} in order {}", savedReview.getId(), productId, orderNumber);
+            log.info("Created new review ID {} for product ID {} in order {} by user {}", 
+                savedReview.getId(), productId, orderNumber, userId);
+
+            // Mark order item as reviewed
+            orderItem.setIsReviewed(true);
+            orderItemRepository.save(orderItem);
 
             // Build reviewed product response
             SubmitOrderReviewResponse.ReviewedProduct reviewedProduct = SubmitOrderReviewResponse.ReviewedProduct.builder()
@@ -1180,19 +1179,25 @@ public class OrderService {
         List<OrderItem> items = orderItemRepository.findByOrder(order);
         
         List<OrderDetailResponseNew.OrderItemDetail> orderItems = items.stream()
-            .map(item -> OrderDetailResponseNew.OrderItemDetail.builder()
-                .id(item.getId())
-                .product(OrderDetailResponseNew.ProductInfo.builder()
-                    .id(item.getProduct().getId())
-                    .name(item.getProduct().getName())
-                    .slug(item.getProduct().getSlug())
-                    .image(getProductImage(item.getProduct()))
-                    .build())
-                .color_name(item.getColor() != null ? item.getColor().getColorName() : "")
-                .quantity(item.getQuantity())
-                .unit_price(item.getUnitPrice())
-                .line_total(item.getTotalPrice())
-                .build())
+            .map(item -> {
+                // Use is_reviewed from entity (stored in database)
+                Boolean isReviewed = item.getIsReviewed() != null ? item.getIsReviewed() : false;
+                
+                return OrderDetailResponseNew.OrderItemDetail.builder()
+                    .id(item.getId())
+                    .product(OrderDetailResponseNew.ProductInfo.builder()
+                        .id(item.getProduct().getId())
+                        .name(item.getProduct().getName())
+                        .slug(item.getProduct().getSlug())
+                        .image(getProductImage(item.getProduct()))
+                        .build())
+                    .color_name(item.getColor() != null ? item.getColor().getColorName() : "")
+                    .quantity(item.getQuantity())
+                    .unit_price(item.getUnitPrice())
+                    .line_total(item.getTotalPrice())
+                    .is_reviewed(isReviewed)
+                    .build();
+            })
             .collect(Collectors.toList());
 
         // Build status history from tracking

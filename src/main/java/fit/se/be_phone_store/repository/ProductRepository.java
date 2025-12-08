@@ -121,6 +121,26 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
                                          @Param("inStock") Boolean inStock,
                                          Pageable pageable);
     
+    // Advanced filtering with search
+    @Query("SELECT p FROM Product p WHERE " +
+           "(:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
+           "LOWER(p.description) LIKE LOWER(CONCAT('%', :search, '%'))) AND " +
+           "(:categoryId IS NULL OR p.category.id = :categoryId) AND " +
+           "(:brandId IS NULL OR p.brand.id = :brandId) AND " +
+           "(:colorId IS NULL OR p.color.id = :colorId) AND " +
+           "(:minPrice IS NULL OR COALESCE(p.discountPrice, p.price) >= :minPrice) AND " +
+           "(:maxPrice IS NULL OR COALESCE(p.discountPrice, p.price) <= :maxPrice) AND " +
+           "(:inStock IS NULL OR (:inStock = true AND p.stockQuantity > 0) OR (:inStock = false)) AND " +
+           "p.isActive = true")
+    Page<Product> findProductsWithFiltersAndSearch(@Param("search") String search,
+                                                   @Param("categoryId") Long categoryId,
+                                                   @Param("brandId") Long brandId,
+                                                   @Param("colorId") Long colorId,
+                                                   @Param("minPrice") BigDecimal minPrice,
+                                                   @Param("maxPrice") BigDecimal maxPrice,
+                                                   @Param("inStock") Boolean inStock,
+                                                   Pageable pageable);
+    
     // Find featured products (if you add isFeatured field later)
     // List<Product> findByIsFeaturedTrueAndIsActiveTrue();
     

@@ -87,6 +87,9 @@ public class OrderDetailResponseNew {
 
         @JsonProperty("line_total")
         private BigDecimal line_total;
+
+        @JsonProperty("is_reviewed")
+        private Boolean is_reviewed;
     }
 
     @Data

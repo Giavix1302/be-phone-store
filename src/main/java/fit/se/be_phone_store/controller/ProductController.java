@@ -47,7 +47,7 @@ public class ProductController {
             @RequestParam(defaultValue = "1") Integer page,
             @RequestParam(defaultValue = "10") Integer limit,
             @RequestParam(required = false) String search,
-            @RequestParam(required = false) String category,
+            @RequestParam(required = false) Long category_id,
             @RequestParam(required = false) Long brand_id,
             @RequestParam(required = false) Long color_id,
             @RequestParam(required = false) BigDecimal min_price,
@@ -56,13 +56,13 @@ public class ProductController {
             @RequestParam(defaultValue = "created_at") String sort_by,
             @RequestParam(defaultValue = "desc") String sort_order) {
 
-        log.info("Getting products - page: {}, limit: {}, search: {}", page, limit, search);
+        log.info("Getting products - page: {}, limit: {}, search: {}, category_id: {}", page, limit, search, category_id);
 
         ProductFilterRequest filters = new ProductFilterRequest();
         filters.setPage(page);
         filters.setLimit(limit);
         filters.setSearch(search);
-        filters.setCategory(category);
+        filters.setCategoryId(category_id);
         filters.setBrandId(brand_id);
         filters.setColorId(color_id);
         filters.setMinPrice(min_price);

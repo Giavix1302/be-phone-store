@@ -212,6 +212,7 @@ CREATE TABLE IF NOT EXISTS `order_items` (
   `quantity` int(11) NOT NULL,
   `unit_price` decimal(10,2) NOT NULL,
   `color_id` bigint(20) NOT NULL,
+  `is_reviewed` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   KEY `idx_order_items_order` (`order_id`),
   KEY `idx_order_items_product` (`product_id`),
