@@ -173,7 +173,7 @@ public class SecurityConfig {
                 "http://127.0.0.1:5174",
                 "http://localhost:8081", // Alternative frontend port
                 "http://localhost:8080", // Same origin
-                "https://phone-store-black.vercel.app/"
+                "https://phone-store-tau.vercel.app/"
         ));
 
         // Allowed methods
