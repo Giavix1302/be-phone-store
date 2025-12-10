@@ -173,8 +173,7 @@ public class SecurityConfig {
                 "http://127.0.0.1:5174",
                 "http://localhost:8081", // Alternative frontend port
                 "http://localhost:8080", // Same origin
-                "https://phone-store-tau.vercel.app/"
-        ));
+                "https://fe-phone-store-five.vercel.app"));
 
         // Allowed methods
         configuration.setAllowedMethods(Arrays.asList(
