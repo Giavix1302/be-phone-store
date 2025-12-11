@@ -59,6 +59,104 @@ public class OrderService {
         User currentUser = authService.getCurrentUser();
         log.info("Creating order for user: {}", userId);
 
+        List<OrderItem> createdOrderItems = new java.util.ArrayList<>();
+        BigDecimal totalAmount = BigDecimal.ZERO;
+
+        // Check if this is a buy now order (not from cart)
+        if (request.getBuyNowItems() != null && !request.getBuyNowItems().isEmpty()) {
+            // Buy now flow - create order directly from product info
+            log.info("Creating buy now order with {} items", request.getBuyNowItems().size());
+
+            for (CreateOrderRequest.BuyNowItem buyNowItem : request.getBuyNowItems()) {
+                // Get product
+                Product product = productRepository.findById(buyNowItem.getProduct_id())
+                        .orElseThrow(() -> new BadRequestException("Sản phẩm không tồn tại: " + buyNowItem.getProduct_id()));
+
+                // Get color if provided
+                Color color = null;
+                if (buyNowItem.getColor_id() != null) {
+                    color = colorRepository.findById(buyNowItem.getColor_id())
+                            .orElseThrow(() -> new BadRequestException("Màu sắc không tồn tại: " + buyNowItem.getColor_id()));
+                }
+
+                // Validate stock
+                if (product.getStockQuantity() < buyNowItem.getQuantity()) {
+                    throw new BadRequestException("Sản phẩm " + product.getName() + " không đủ số lượng. Còn lại: " + product.getStockQuantity());
+                }
+
+                // Calculate unit price (use discount_price if available, otherwise price)
+                BigDecimal unitPrice = product.getDiscountPrice() != null && product.getDiscountPrice().compareTo(BigDecimal.ZERO) > 0
+                        ? product.getDiscountPrice()
+                        : product.getPrice();
+
+                // Add to total
+                totalAmount = totalAmount.add(unitPrice.multiply(BigDecimal.valueOf(buyNowItem.getQuantity())));
+            }
+
+            // Create order
+            Order order = new Order();
+            order.setUser(currentUser);
+            order.setTotalAmount(totalAmount);
+            order.setStatus(Order.OrderStatus.PENDING);
+            order.setShippingAddress(request.getShippingAddress());
+            Order.PaymentMethod paymentMethod = Order.PaymentMethod.COD;
+            if (request.getPaymentMethod() != null && !request.getPaymentMethod().isEmpty()) {
+                try {
+                    paymentMethod = Order.PaymentMethod.valueOf(request.getPaymentMethod().toUpperCase());
+                } catch (IllegalArgumentException e) {
+                    paymentMethod = Order.PaymentMethod.COD;
+                }
+            }
+            order.setPaymentMethod(paymentMethod);
+            if (request.getNotes() != null) {
+                order.setNotes(request.getNotes());
+            }
+
+            Order savedOrder = orderRepository.save(order);
+
+            // Create initial tracking event
+            OrderTracking initialTracking = new OrderTracking();
+            initialTracking.setOrder(savedOrder);
+            initialTracking.setStatus(Order.OrderStatus.PENDING);
+            initialTracking.setDescription("Đơn hàng đã được tạo");
+            initialTracking.setLocation("");
+            orderTrackingRepository.save(initialTracking);
+
+            // Create order items from buy now items
+            for (CreateOrderRequest.BuyNowItem buyNowItem : request.getBuyNowItems()) {
+                Product product = productRepository.findById(buyNowItem.getProduct_id())
+                        .orElseThrow(() -> new BadRequestException("Sản phẩm không tồn tại: " + buyNowItem.getProduct_id()));
+
+                Color color = null;
+                if (buyNowItem.getColor_id() != null) {
+                    color = colorRepository.findById(buyNowItem.getColor_id())
+                            .orElseThrow(() -> new BadRequestException("Màu sắc không tồn tại: " + buyNowItem.getColor_id()));
+                }
+
+                BigDecimal unitPrice = product.getDiscountPrice() != null && product.getDiscountPrice().compareTo(BigDecimal.ZERO) > 0
+                        ? product.getDiscountPrice()
+                        : product.getPrice();
+
+                OrderItem orderItem = new OrderItem();
+                orderItem.setOrder(savedOrder);
+                orderItem.setProduct(product);
+                orderItem.setColor(color);
+                orderItem.setQuantity(buyNowItem.getQuantity());
+                orderItem.setUnitPrice(unitPrice);
+
+                OrderItem savedItem = orderItemRepository.save(orderItem);
+                createdOrderItems.add(savedItem);
+
+                // Update product stock
+                product.setStockQuantity(product.getStockQuantity() - buyNowItem.getQuantity());
+                productRepository.save(product);
+            }
+
+            // Build response
+            return buildOrderResponse(savedOrder, createdOrderItems, currentUser);
+        }
+
+        // Original cart flow
         // Get user's cart
         Cart cart = cartRepository.findByUserId(userId)
                 .orElseThrow(() -> new BadRequestException("Cart not found"));
@@ -83,7 +181,6 @@ public class OrderService {
             cartItems = filteredItems;
         }
 
-
         List<OutOfStockResponse.OutOfStockItem> outOfStockItems = validateCartItems(cartItems);
         if (!outOfStockItems.isEmpty()) {
             OutOfStockResponse errorData = OutOfStockResponse.builder()
@@ -93,7 +190,7 @@ public class OrderService {
         }
 
         // Calculate total amount
-        BigDecimal totalAmount = cartItems.stream()
+        totalAmount = cartItems.stream()
                 .map(CartItem::getTotalPrice)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -127,7 +224,6 @@ public class OrderService {
         initialTracking.setDescription("Đơn hàng đã được tạo");
         initialTracking.setLocation("");
         orderTrackingRepository.save(initialTracking);
-        List<OrderItem> createdOrderItems = new java.util.ArrayList<>();
 
         // Create order items
         for (CartItem cartItem : cartItems) {
@@ -155,6 +251,14 @@ public class OrderService {
             cartItemRepository.deleteByCart(cart);
         }
 
+        // Build response
+        return buildOrderResponse(savedOrder, createdOrderItems, currentUser);
+    }
+
+    /**
+     * Build order response and send confirmation email
+     */
+    private ApiResponse<OrderCreatedResponse> buildOrderResponse(Order savedOrder, List<OrderItem> createdOrderItems, User currentUser) {
         // Build response data
         List<OrderCreatedResponse.OrderItemInfo> itemInfos = createdOrderItems.stream()
                 .map(item -> OrderCreatedResponse.OrderItemInfo.builder()
@@ -174,7 +278,7 @@ public class OrderService {
                 .user_id(currentUser.getId())
                 .total_amount(savedOrder.getTotalAmount())
                 .status(savedOrder.getStatus().name())
-                .payment_method(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "COD")
+                .payment_method(savedOrder.getPaymentMethod() != null ? savedOrder.getPaymentMethod().name() : "COD")
                 .shipping_address(savedOrder.getShippingAddress())
                 .note(savedOrder.getNotes())
                 .items(itemInfos)
