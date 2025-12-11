@@ -45,6 +45,7 @@ public class OrderService {
     private final ColorRepository colorRepository;
     private final ReviewRepository reviewRepository;
     private final AuthService authService;
+    private final EmailService emailService;
 
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
 
@@ -58,9 +59,107 @@ public class OrderService {
         User currentUser = authService.getCurrentUser();
         log.info("Creating order for user: {}", userId);
 
+        List<OrderItem> createdOrderItems = new java.util.ArrayList<>();
+        BigDecimal totalAmount = BigDecimal.ZERO;
+
+        // Check if this is a buy now order (not from cart)
+        if (request.getBuyNowItems() != null && !request.getBuyNowItems().isEmpty()) {
+            // Buy now flow - create order directly from product info
+            log.info("Creating buy now order with {} items", request.getBuyNowItems().size());
+
+            for (CreateOrderRequest.BuyNowItem buyNowItem : request.getBuyNowItems()) {
+                // Get product
+                Product product = productRepository.findById(buyNowItem.getProduct_id())
+                        .orElseThrow(() -> new BadRequestException("Sản phẩm không tồn tại: " + buyNowItem.getProduct_id()));
+
+                // Get color if provided
+                Color color = null;
+                if (buyNowItem.getColor_id() != null) {
+                    color = colorRepository.findById(buyNowItem.getColor_id())
+                            .orElseThrow(() -> new BadRequestException("Màu sắc không tồn tại: " + buyNowItem.getColor_id()));
+                }
+
+                // Validate stock
+                if (product.getStockQuantity() < buyNowItem.getQuantity()) {
+                    throw new BadRequestException("Sản phẩm " + product.getName() + " không đủ số lượng. Còn lại: " + product.getStockQuantity());
+                }
+
+                // Calculate unit price (use discount_price if available, otherwise price)
+                BigDecimal unitPrice = product.getDiscountPrice() != null && product.getDiscountPrice().compareTo(BigDecimal.ZERO) > 0
+                        ? product.getDiscountPrice()
+                        : product.getPrice();
+
+                // Add to total
+                totalAmount = totalAmount.add(unitPrice.multiply(BigDecimal.valueOf(buyNowItem.getQuantity())));
+            }
+
+            // Create order
+            Order order = new Order();
+            order.setUser(currentUser);
+            order.setTotalAmount(totalAmount);
+            order.setStatus(Order.OrderStatus.PENDING);
+            order.setShippingAddress(request.getShippingAddress());
+            Order.PaymentMethod paymentMethod = Order.PaymentMethod.COD;
+            if (request.getPaymentMethod() != null && !request.getPaymentMethod().isEmpty()) {
+                try {
+                    paymentMethod = Order.PaymentMethod.valueOf(request.getPaymentMethod().toUpperCase());
+                } catch (IllegalArgumentException e) {
+                    paymentMethod = Order.PaymentMethod.COD;
+                }
+            }
+            order.setPaymentMethod(paymentMethod);
+            if (request.getNotes() != null) {
+                order.setNotes(request.getNotes());
+            }
+
+            Order savedOrder = orderRepository.save(order);
+
+            // Create initial tracking event
+            OrderTracking initialTracking = new OrderTracking();
+            initialTracking.setOrder(savedOrder);
+            initialTracking.setStatus(Order.OrderStatus.PENDING);
+            initialTracking.setDescription("Đơn hàng đã được tạo");
+            initialTracking.setLocation("");
+            orderTrackingRepository.save(initialTracking);
+
+            // Create order items from buy now items
+            for (CreateOrderRequest.BuyNowItem buyNowItem : request.getBuyNowItems()) {
+                Product product = productRepository.findById(buyNowItem.getProduct_id())
+                        .orElseThrow(() -> new BadRequestException("Sản phẩm không tồn tại: " + buyNowItem.getProduct_id()));
+
+                Color color = null;
+                if (buyNowItem.getColor_id() != null) {
+                    color = colorRepository.findById(buyNowItem.getColor_id())
+                            .orElseThrow(() -> new BadRequestException("Màu sắc không tồn tại: " + buyNowItem.getColor_id()));
+                }
+
+                BigDecimal unitPrice = product.getDiscountPrice() != null && product.getDiscountPrice().compareTo(BigDecimal.ZERO) > 0
+                        ? product.getDiscountPrice()
+                        : product.getPrice();
+
+                OrderItem orderItem = new OrderItem();
+                orderItem.setOrder(savedOrder);
+                orderItem.setProduct(product);
+                orderItem.setColor(color);
+                orderItem.setQuantity(buyNowItem.getQuantity());
+                orderItem.setUnitPrice(unitPrice);
+
+                OrderItem savedItem = orderItemRepository.save(orderItem);
+                createdOrderItems.add(savedItem);
+
+                // Update product stock
+                product.setStockQuantity(product.getStockQuantity() - buyNowItem.getQuantity());
+                productRepository.save(product);
+            }
+
+            // Build response
+            return buildOrderResponse(savedOrder, createdOrderItems, currentUser);
+        }
+
+        // Original cart flow
         // Get user's cart
         Cart cart = cartRepository.findByUserId(userId)
-            .orElseThrow(() -> new BadRequestException("Cart not found"));
+                .orElseThrow(() -> new BadRequestException("Cart not found"));
 
         // Get cart items
         List<CartItem> cartItems = cartItemRepository.findByCart(cart);
@@ -82,19 +181,18 @@ public class OrderService {
             cartItems = filteredItems;
         }
 
-
         List<OutOfStockResponse.OutOfStockItem> outOfStockItems = validateCartItems(cartItems);
         if (!outOfStockItems.isEmpty()) {
             OutOfStockResponse errorData = OutOfStockResponse.builder()
-                .out_of_stock_items(outOfStockItems)
-                .build();
+                    .out_of_stock_items(outOfStockItems)
+                    .build();
             throw new BadRequestException("Một số sản phẩm đã hết hàng", errorData);
         }
 
         // Calculate total amount
-        BigDecimal totalAmount = cartItems.stream()
-            .map(CartItem::getTotalPrice)
-            .reduce(BigDecimal.ZERO, BigDecimal::add);
+        totalAmount = cartItems.stream()
+                .map(CartItem::getTotalPrice)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         // Create order
         Order order = new Order();
@@ -126,7 +224,6 @@ public class OrderService {
         initialTracking.setDescription("Đơn hàng đã được tạo");
         initialTracking.setLocation("");
         orderTrackingRepository.save(initialTracking);
-        List<OrderItem> createdOrderItems = new java.util.ArrayList<>();
 
         // Create order items
         for (CartItem cartItem : cartItems) {
@@ -136,7 +233,7 @@ public class OrderService {
             orderItem.setColor(cartItem.getColor());
             orderItem.setQuantity(cartItem.getQuantity());
             orderItem.setUnitPrice(cartItem.getUnitPrice());
-            
+
             OrderItem savedItem = orderItemRepository.save(orderItem);
             createdOrderItems.add(savedItem);
 
@@ -154,6 +251,14 @@ public class OrderService {
             cartItemRepository.deleteByCart(cart);
         }
 
+        // Build response
+        return buildOrderResponse(savedOrder, createdOrderItems, currentUser);
+    }
+
+    /**
+     * Build order response and send confirmation email
+     */
+    private ApiResponse<OrderCreatedResponse> buildOrderResponse(Order savedOrder, List<OrderItem> createdOrderItems, User currentUser) {
         // Build response data
         List<OrderCreatedResponse.OrderItemInfo> itemInfos = createdOrderItems.stream()
                 .map(item -> OrderCreatedResponse.OrderItemInfo.builder()
@@ -173,7 +278,7 @@ public class OrderService {
                 .user_id(currentUser.getId())
                 .total_amount(savedOrder.getTotalAmount())
                 .status(savedOrder.getStatus().name())
-                .payment_method(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "COD")
+                .payment_method(savedOrder.getPaymentMethod() != null ? savedOrder.getPaymentMethod().name() : "COD")
                 .shipping_address(savedOrder.getShippingAddress())
                 .note(savedOrder.getNotes())
                 .items(itemInfos)
@@ -183,6 +288,19 @@ public class OrderService {
         OrderCreatedResponse responseData = OrderCreatedResponse.builder()
                 .order(orderInfo)
                 .build();
+
+        // Send order confirmation email
+        try {
+            log.info("Attempting to send order confirmation email for order: {} to email: {}",
+                    savedOrder.getOrderNumber(), savedOrder.getUser().getEmail());
+            sendOrderConfirmationEmail(savedOrder, createdOrderItems);
+            log.info("Order confirmation email sent successfully for order: {} to email: {}",
+                    savedOrder.getOrderNumber(), savedOrder.getUser().getEmail());
+        } catch (Exception e) {
+            log.error("Failed to send order confirmation email for order: {} to email: {}. Error: {}",
+                    savedOrder.getOrderNumber(), savedOrder.getUser().getEmail(), e.getMessage(), e);
+            // Don't fail the order creation if email fails
+        }
 
         log.info("Order created successfully: {}", savedOrder.getOrderNumber());
         return ApiResponse.success("Tạo đơn hàng thành công", responseData);
@@ -217,44 +335,44 @@ public class OrderService {
         if (fromDate != null || toDate != null) {
             LocalDateTime fromDateTime = fromDate != null ? fromDate.atStartOfDay() : null;
             LocalDateTime toDateTime = toDate != null ? toDate.atTime(23, 59, 59) : null;
-            
+
             orders = orders.stream()
-                .filter(order -> {
-                    if (fromDateTime != null && order.getCreatedAt().isBefore(fromDateTime)) {
-                        return false;
-                    }
-                    if (toDateTime != null && order.getCreatedAt().isAfter(toDateTime)) {
-                        return false;
-                    }
-                    return true;
-                })
-                .collect(Collectors.toList());
+                    .filter(order -> {
+                        if (fromDateTime != null && order.getCreatedAt().isBefore(fromDateTime)) {
+                            return false;
+                        }
+                        if (toDateTime != null && order.getCreatedAt().isAfter(toDateTime)) {
+                            return false;
+                        }
+                        return true;
+                    })
+                    .collect(Collectors.toList());
         }
 
         // Sort and paginate
         orders.sort((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt())); // Default desc
-        
+
         int start = (int) pageable.getOffset();
         int end = Math.min(start + pageable.getPageSize(), orders.size());
         List<Order> pagedOrders = orders.subList(start, end);
 
         List<OrderListResponse.OrderItem> orderItems = pagedOrders.stream()
-            .map(this::mapToOrderListItem)
-            .collect(Collectors.toList());
+                .map(this::mapToOrderListItem)
+                .collect(Collectors.toList());
 
         OrderListResponse.PaginationInfo pagination = OrderListResponse.PaginationInfo.builder()
-            .current_page(pageable.getPageNumber() + 1)
-            .total_pages((int) Math.ceil((double) orders.size() / pageable.getPageSize()))
-            .total_items((long) orders.size())
-            .items_per_page(pageable.getPageSize())
-            .has_next(end < orders.size())
-            .has_prev(start > 0)
-            .build();
+                .current_page(pageable.getPageNumber() + 1)
+                .total_pages((int) Math.ceil((double) orders.size() / pageable.getPageSize()))
+                .total_items((long) orders.size())
+                .items_per_page(pageable.getPageSize())
+                .has_next(end < orders.size())
+                .has_prev(start > 0)
+                .build();
 
         OrderListResponse response = OrderListResponse.builder()
-            .orders(orderItems)
-            .pagination(pagination)
-            .build();
+                .orders(orderItems)
+                .pagination(pagination)
+                .build();
 
         return ApiResponse.success("Orders retrieved successfully", response);
     }
@@ -270,7 +388,7 @@ public class OrderService {
         log.info("Getting order details for order {} by user {}", orderNumber, userId);
 
         Order order = orderRepository.findByOrderNumber(orderNumber)
-            .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
 
         // Check if user can access this order
         if (!order.getUser().getId().equals(userId) && !authService.isCurrentUserAdmin()) {
@@ -292,7 +410,7 @@ public class OrderService {
         log.info("Cancelling order {} by user {}", orderNumber, userId);
 
         Order order = orderRepository.findByOrderNumber(orderNumber)
-            .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
 
         // Check if user can cancel this order
         if (!order.getUser().getId().equals(userId)) {
@@ -307,9 +425,9 @@ public class OrderService {
         // Cancel order and restore stock
         order.setStatus(Order.OrderStatus.CANCELLED);
         if (request != null && request.getReason() != null) {
-            order.setNotes(order.getNotes() != null ? 
-                order.getNotes() + "\nCancel reason: " + request.getReason() : 
-                "Cancel reason: " + request.getReason());
+            order.setNotes(order.getNotes() != null ?
+                    order.getNotes() + "\nCancel reason: " + request.getReason() :
+                    "Cancel reason: " + request.getReason());
         }
         orderRepository.save(order);
 
@@ -389,7 +507,7 @@ public class OrderService {
         }
 
         Order order = orderRepository.findById(orderId)
-            .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
 
         Order.OrderStatus oldStatus = order.getStatus();
         order.setStatus(status);
@@ -419,7 +537,7 @@ public class OrderService {
         }
 
         Map<String, Object> statistics = new HashMap<>();
-        
+
         // Basic counts
         statistics.put("totalOrders", orderRepository.count());
         statistics.put("pendingOrders", orderRepository.countByStatus(Order.OrderStatus.PENDING));
@@ -490,11 +608,11 @@ public class OrderService {
         }
 
         List<Order> recentOrders = orderRepository.findRecentOrders(
-            org.springframework.data.domain.PageRequest.of(0, limit));
-        
+                org.springframework.data.domain.PageRequest.of(0, limit));
+
         List<OrderResponse> responseList = recentOrders.stream()
-            .map(this::mapToOrderResponse)
-            .collect(Collectors.toList());
+                .map(this::mapToOrderResponse)
+                .collect(Collectors.toList());
 
         return ApiResponse.success("Recent orders retrieved successfully", responseList);
     }
@@ -505,30 +623,30 @@ public class OrderService {
      */
     private List<OutOfStockResponse.OutOfStockItem> validateCartItems(List<CartItem> cartItems) {
         List<OutOfStockResponse.OutOfStockItem> outOfStockItems = new java.util.ArrayList<>();
-        
+
         for (CartItem item : cartItems) {
             Product product = item.getProduct();
-            
+
             // Check if product is active
             if (!product.getIsActive()) {
                 outOfStockItems.add(OutOfStockResponse.OutOfStockItem.builder()
-                    .product_name(product.getName())
-                    .requested_quantity(item.getQuantity())
-                    .available_quantity(0)
-                    .build());
+                        .product_name(product.getName())
+                        .requested_quantity(item.getQuantity())
+                        .available_quantity(0)
+                        .build());
                 continue;
             }
-            
+
             // Check stock availability
             if (product.getStockQuantity() < item.getQuantity()) {
                 outOfStockItems.add(OutOfStockResponse.OutOfStockItem.builder()
-                    .product_name(product.getName())
-                    .requested_quantity(item.getQuantity())
-                    .available_quantity(product.getStockQuantity())
-                    .build());
+                        .product_name(product.getName())
+                        .requested_quantity(item.getQuantity())
+                        .available_quantity(product.getStockQuantity())
+                        .build());
             }
         }
-        
+
         return outOfStockItems;
     }
 
@@ -537,18 +655,18 @@ public class OrderService {
      */
     private OrderResponse mapToOrderResponse(Order order) {
         int itemCount = orderItemRepository.countByOrderId(order.getId()).intValue();
-        
+
         return OrderResponse.builder()
-            .id(order.getId())
-            .orderNumber(order.getOrderNumber())
-            .totalAmount(order.getTotalAmount())
-            .status(order.getStatus().name())
-            .shippingAddress(order.getShippingAddress())
-            .itemCount(itemCount)
-            .customerName(order.getUser().getFullName())
-            .customerEmail(order.getUser().getEmail())
-            .createdAt(order.getCreatedAt())
-            .build();
+                .id(order.getId())
+                .orderNumber(order.getOrderNumber())
+                .totalAmount(order.getTotalAmount())
+                .status(order.getStatus().name())
+                .shippingAddress(order.getShippingAddress())
+                .itemCount(itemCount)
+                .customerName(order.getUser().getFullName())
+                .customerEmail(order.getUser().getEmail())
+                .createdAt(order.getCreatedAt())
+                .build();
     }
 
     /**
@@ -556,24 +674,24 @@ public class OrderService {
      */
     private OrderDetailResponse mapToOrderDetailResponse(Order order) {
         List<OrderItem> orderItems = orderItemRepository.findByOrder(order);
-        
+
         List<OrderDetailResponse.OrderItemResponse> items = orderItems.stream()
-            .map(this::mapToOrderItemResponse)
-            .collect(Collectors.toList());
+                .map(this::mapToOrderItemResponse)
+                .collect(Collectors.toList());
 
         return OrderDetailResponse.builder()
-            .id(order.getId())
-            .orderNumber(order.getOrderNumber())
-            .totalAmount(order.getTotalAmount())
-            .status(order.getStatus().name())
-            .shippingAddress(order.getShippingAddress())
-            .notes(order.getNotes())
-            .customerName(order.getUser().getFullName())
-            .customerEmail(order.getUser().getEmail())
-            .customerPhone(order.getUser().getPhone())
-            .items(items)
-            .createdAt(order.getCreatedAt())
-            .build();
+                .id(order.getId())
+                .orderNumber(order.getOrderNumber())
+                .totalAmount(order.getTotalAmount())
+                .status(order.getStatus().name())
+                .shippingAddress(order.getShippingAddress())
+                .notes(order.getNotes())
+                .customerName(order.getUser().getFullName())
+                .customerEmail(order.getUser().getEmail())
+                .customerPhone(order.getUser().getPhone())
+                .items(items)
+                .createdAt(order.getCreatedAt())
+                .build();
     }
 
     /**
@@ -581,13 +699,13 @@ public class OrderService {
      */
     private OrderDetailResponse.OrderItemResponse mapToOrderItemResponse(OrderItem item) {
         return OrderDetailResponse.OrderItemResponse.builder()
-            .id(item.getId())
-            .productId(item.getProduct().getId())
-            .productName(item.getProduct().getName())
-            .quantity(item.getQuantity())
-            .unitPrice(item.getUnitPrice())
-            .totalPrice(item.getTotalPrice())
-            .build();
+                .id(item.getId())
+                .productId(item.getProduct().getId())
+                .productName(item.getProduct().getName())
+                .quantity(item.getQuantity())
+                .unitPrice(item.getUnitPrice())
+                .totalPrice(item.getTotalPrice())
+                .build();
     }
 
     /**
@@ -599,7 +717,7 @@ public class OrderService {
         log.info("Tracking order: {} by user {}", orderNumber, userId);
 
         Order order = orderRepository.findByOrderNumber(orderNumber)
-            .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
 
         // Check if user can access this order
         if (!order.getUser().getId().equals(userId) && !authService.isCurrentUserAdmin()) {
@@ -608,7 +726,7 @@ public class OrderService {
 
         // Get tracking history from database
         List<OrderTracking> trackingHistory = orderTrackingRepository.findByOrderNumber(orderNumber);
-        
+
         OrderTrackingResponse response = buildTrackingResponseFromDatabase(order, trackingHistory);
         return ApiResponse.success("Tracking info retrieved successfully", response);
     }
@@ -622,7 +740,7 @@ public class OrderService {
         log.info("Submitting review for order: {} by user {}", orderNumber, userId);
 
         Order order = orderRepository.findByOrderNumber(orderNumber)
-            .orElseThrow(() -> new ResourceNotFoundException("Đơn hàng không tìm thấy"));
+                .orElseThrow(() -> new ResourceNotFoundException("Đơn hàng không tìm thấy"));
 
         // Check if user owns this order
         if (!order.getUser().getId().equals(userId)) {
@@ -644,9 +762,9 @@ public class OrderService {
 
         // Get product IDs in the order
         List<Long> orderProductIds = orderItems.stream()
-            .map(item -> item.getProduct().getId())
-            .distinct()
-            .collect(Collectors.toList());
+                .map(item -> item.getProduct().getId())
+                .distinct()
+                .collect(Collectors.toList());
 
         log.info("Products in order: {}", orderProductIds);
 
@@ -664,7 +782,7 @@ public class OrderService {
 
         for (SubmitOrderReviewRequest.ProductReview reviewRequest : request.getReviews()) {
             Long productId = reviewRequest.getProduct_id();
-            log.info("Processing review for product ID: {} in order {} by user {}", productId, orderNumber, userId);
+            log.info("Processing review for product ID: {}", productId);
 
             // Check if product is in order
             if (!orderProductIds.contains(productId)) {
@@ -674,60 +792,66 @@ public class OrderService {
 
             // Get product
             Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new ResourceNotFoundException("Sản phẩm không tìm thấy"));
+                    .orElseThrow(() -> new ResourceNotFoundException("Sản phẩm không tìm thấy"));
 
-            // Find all OrderItems for this product in this order
-            List<OrderItem> productOrderItems = orderItems.stream()
-                .filter(item -> item.getProduct().getId().equals(productId))
-                .collect(Collectors.toList());
-            
-            if (productOrderItems.isEmpty()) {
-                throw new ResourceNotFoundException("Không tìm thấy sản phẩm trong đơn hàng");
+            boolean reviewedInThisOrder = reviewRepository.existsByUserIdAndProductIdAndCreatedAtAfter(
+                    userId, productId, orderDeliveredDate);
+
+            if (reviewedInThisOrder) {
+                // Product already reviewed in this order - get existing review
+                Optional<Review> existingReview = reviewRepository.findByUserIdAndProductId(userId, productId);
+
+                if (existingReview.isPresent()) {
+                    Review review = existingReview.get();
+                    log.info("Product {} already reviewed in order {} by user {}, review ID: {}",
+                            productId, orderNumber, userId, review.getId());
+
+                    // Build response for already reviewed product
+                    SubmitOrderReviewResponse.ReviewedProduct reviewedProduct = SubmitOrderReviewResponse.ReviewedProduct.builder()
+                            .productId(product.getId())
+                            .productName(product.getName())
+                            .rating(review.getRating())
+                            .reviewId(review.getId())
+                            .status("already_reviewed")
+                            .message("Sản phẩm này đã được đánh giá trong đơn hàng này")
+                            .build();
+
+                    reviewedProducts.add(reviewedProduct);
+                    continue; // Skip creating new review
+                }
             }
-            
-            OrderItem orderItem = productOrderItems.get(0); 
 
-            if (orderItem.getIsReviewed() != null && orderItem.getIsReviewed()) {
-                log.warn("Product {} already reviewed in order {} by user {} (is_reviewed = true)", 
-                    productId, orderNumber, userId);
-                throw new BadRequestException(
-                    String.format("Sản phẩm '%s' đã được đánh giá trong đơn hàng này. Không thể đánh giá lại.", 
-                        product.getName()));
-            }
-
-
+            // Check if review exists from a different order (created before this order was delivered)
             Optional<Review> existingReview = reviewRepository.findByUserIdAndProductId(userId, productId);
             if (existingReview.isPresent()) {
                 Review oldReview = existingReview.get();
 
+
                 if (oldReview.getCreatedAt().isBefore(orderDeliveredDate)) {
-                    log.info("Product {} was reviewed in a different order by same user, updating review ID {} for order {}", 
-                        productId, oldReview.getId(), orderNumber);
-                    
+                    log.info("Product {} was reviewed in a different order, updating review ID {} for order {}",
+                            productId, oldReview.getId(), orderNumber);
+
+                    // Update existing review
                     oldReview.setRating(reviewRequest.getRating());
                     oldReview.setComment(reviewRequest.getComment());
                     Review updatedReview = reviewRepository.save(oldReview);
-                    
-                    for (OrderItem item : productOrderItems) {
-                        item.setIsReviewed(true);
-                        orderItemRepository.save(item);
-                    }
-                    
+
+                    // Build response for updated review
                     SubmitOrderReviewResponse.ReviewedProduct reviewedProduct = SubmitOrderReviewResponse.ReviewedProduct.builder()
-                        .productId(product.getId())
-                        .productName(product.getName())
-                        .rating(reviewRequest.getRating())
-                        .reviewId(updatedReview.getId())
-                        .status("updated")
-                        .message("Đã cập nhật đánh giá từ đơn hàng khác")
-                        .build();
-                    
+                            .productId(product.getId())
+                            .productName(product.getName())
+                            .rating(reviewRequest.getRating())
+                            .reviewId(updatedReview.getId())
+                            .status("updated")
+                            .message("Đã cập nhật đánh giá từ đơn hàng khác")
+                            .build();
+
                     reviewedProducts.add(reviewedProduct);
                     continue;
                 }
             }
 
-            // Create new review (first time this user reviews this product)
+            // Create new review (first time reviewing this product)
             Review review = new Review();
             review.setUser(order.getUser());
             review.setProduct(product);
@@ -735,22 +859,17 @@ public class OrderService {
             review.setComment(reviewRequest.getComment());
 
             Review savedReview = reviewRepository.save(review);
-            log.info("Created new review ID {} for product ID {} in order {} by user {}", 
-                savedReview.getId(), productId, orderNumber, userId);
-
-            // Mark order item as reviewed
-            orderItem.setIsReviewed(true);
-            orderItemRepository.save(orderItem);
+            log.info("Created review ID {} for product ID {} in order {}", savedReview.getId(), productId, orderNumber);
 
             // Build reviewed product response
             SubmitOrderReviewResponse.ReviewedProduct reviewedProduct = SubmitOrderReviewResponse.ReviewedProduct.builder()
-                .productId(product.getId())
-                .productName(product.getName())
-                .rating(reviewRequest.getRating())
-                .reviewId(savedReview.getId())
-                .status("created")
-                .message("Đánh giá đã được tạo thành công")
-                .build();
+                    .productId(product.getId())
+                    .productName(product.getName())
+                    .rating(reviewRequest.getRating())
+                    .reviewId(savedReview.getId())
+                    .status("created")
+                    .message("Đánh giá đã được tạo thành công")
+                    .build();
 
             reviewedProducts.add(reviewedProduct);
         }
@@ -761,14 +880,14 @@ public class OrderService {
 
         // Count created, updated, and already reviewed
         long createdCount = reviewedProducts.stream()
-            .filter(p -> "created".equals(p.getStatus()))
-            .count();
+                .filter(p -> "created".equals(p.getStatus()))
+                .count();
         long updatedCount = reviewedProducts.stream()
-            .filter(p -> "updated".equals(p.getStatus()))
-            .count();
+                .filter(p -> "updated".equals(p.getStatus()))
+                .count();
         long alreadyReviewedCount = reviewedProducts.stream()
-            .filter(p -> "already_reviewed".equals(p.getStatus()))
-            .count();
+                .filter(p -> "already_reviewed".equals(p.getStatus()))
+                .count();
 
         // Build appropriate message
         String message;
@@ -782,7 +901,7 @@ public class OrderService {
         if (alreadyReviewedCount > 0) {
             parts.add(String.format("%d sản phẩm đã được đánh giá trong đơn hàng này", alreadyReviewedCount));
         }
-        
+
         if (parts.isEmpty()) {
             message = "Đã xử lý đánh giá";
         } else {
@@ -790,10 +909,10 @@ public class OrderService {
         }
 
         SubmitOrderReviewResponse responseData = SubmitOrderReviewResponse.builder()
-            .orderNumber(orderNumber)
-            .reviewedProducts(reviewedProducts)
-            .reviewedAt(reviewedAt.format(ISO_FORMATTER))
-            .build();
+                .orderNumber(orderNumber)
+                .reviewedProducts(reviewedProducts)
+                .reviewedAt(reviewedAt.format(ISO_FORMATTER))
+                .build();
 
         return ApiResponse.success(message, responseData);
     }
@@ -803,10 +922,10 @@ public class OrderService {
      */
     @Transactional(readOnly = true)
     public ApiResponse<AdminOrderListResponse> getAllOrders(
-            String status, Long userId, LocalDate fromDate, LocalDate toDate, 
+            String status, Long userId, LocalDate fromDate, LocalDate toDate,
             String search, Pageable pageable) {
-        log.info("Getting all orders (Admin) with filters - status: {}, userId: {}, fromDate: {}, toDate: {}, search: {}", 
-            status, userId, fromDate, toDate, search);
+        log.info("Getting all orders (Admin) with filters - status: {}, userId: {}, fromDate: {}, toDate: {}, search: {}",
+                status, userId, fromDate, toDate, search);
 
         // Check admin permission
         if (!authService.isCurrentUserAdmin()) {
@@ -829,29 +948,29 @@ public class OrderService {
 
         // Query with filters
         Page<Order> ordersPage = orderRepository.findOrdersWithFilters(
-            statusEnum, userId, fromDateTime, toDateTime, search, pageable);
-        
+                statusEnum, userId, fromDateTime, toDateTime, search, pageable);
+
         List<AdminOrderListResponse.AdminOrderItem> orderItems = ordersPage.getContent().stream()
-            .map(this::mapToAdminOrderItem)
-            .collect(Collectors.toList());
+                .map(this::mapToAdminOrderItem)
+                .collect(Collectors.toList());
 
         AdminOrderListResponse.PaginationInfo pagination = AdminOrderListResponse.PaginationInfo.builder()
-            .current_page(pageable.getPageNumber() + 1)
-            .total_pages(ordersPage.getTotalPages())
-            .total_items(ordersPage.getTotalElements())
-            .items_per_page(pageable.getPageSize())
-            .has_next(ordersPage.hasNext())
-            .has_prev(ordersPage.hasPrevious())
-            .build();
+                .current_page(pageable.getPageNumber() + 1)
+                .total_pages(ordersPage.getTotalPages())
+                .total_items(ordersPage.getTotalElements())
+                .items_per_page(pageable.getPageSize())
+                .has_next(ordersPage.hasNext())
+                .has_prev(ordersPage.hasPrevious())
+                .build();
 
         // Build summary
         AdminOrderListResponse.SummaryInfo summary = buildSummaryInfo();
 
         AdminOrderListResponse response = AdminOrderListResponse.builder()
-            .orders(orderItems)
-            .pagination(pagination)
-            .summary(summary)
-            .build();
+                .orders(orderItems)
+                .pagination(pagination)
+                .summary(summary)
+                .build();
 
         return ApiResponse.success("Orders retrieved successfully", response);
     }
@@ -868,22 +987,22 @@ public class OrderService {
         }
 
         Order order = orderRepository.findByOrderNumber(orderNumber)
-            .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
 
         Order.OrderStatus oldStatus = order.getStatus();
         try {
             Order.OrderStatus newStatus = Order.OrderStatus.valueOf(request.getStatus().toUpperCase());
-            
+
             // Validate status transition
             if (!isValidStatusTransition(oldStatus, newStatus)) {
                 throw new BadRequestException("Invalid status transition from " + oldStatus + " to " + newStatus);
             }
 
             order.setStatus(newStatus);
-            
+
             if (request.getNote() != null) {
-                order.setNotes(order.getNotes() != null ? 
-                    order.getNotes() + "\n" + request.getNote() : request.getNote());
+                order.setNotes(order.getNotes() != null ?
+                        order.getNotes() + "\n" + request.getNote() : request.getNote());
             }
             orderRepository.save(order);
 
@@ -894,7 +1013,7 @@ public class OrderService {
             tracking.setDescription(getStatusDescription(newStatus));
             tracking.setLocation(request.getLocation() != null ? request.getLocation() : "");
             tracking.setNote(request.getNote());
-            
+
             // Store tracking info in tracking event
             if (request.getTracking_number() != null && !request.getTracking_number().isEmpty()) {
                 tracking.setTrackingNumber(request.getTracking_number());
@@ -905,7 +1024,7 @@ public class OrderService {
             if (request.getEstimated_delivery() != null) {
                 tracking.setEstimatedDelivery(request.getEstimated_delivery());
             }
-            
+
             orderTrackingRepository.save(tracking);
 
             Map<String, Object> responseData = new HashMap<>();
@@ -914,8 +1033,8 @@ public class OrderService {
             responseData.put("new_status", newStatus.name());
             responseData.put("updated_at", LocalDateTime.now());
             responseData.put("updated_by", Map.of(
-                "id", authService.getCurrentUserId(),
-                "full_name", authService.getCurrentUser().getFullName()
+                    "id", authService.getCurrentUserId(),
+                    "full_name", authService.getCurrentUser().getFullName()
             ));
 
             return ApiResponse.success("Order status updated successfully", responseData);
@@ -969,91 +1088,91 @@ public class OrderService {
         // Get orders in date range
         List<Order> orders = orderRepository.findByCreatedAtBetween(fromDateTime, toDateTime);
         List<Order> deliveredOrders = orders.stream()
-            .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
-            .collect(Collectors.toList());
+                .filter(o -> o.getStatus() == Order.OrderStatus.DELIVERED)
+                .collect(Collectors.toList());
 
         // Build statistics
         OrderStatisticsResponse.OverviewInfo overview = OrderStatisticsResponse.OverviewInfo.builder()
-            .total_orders(orders.size())
-            .total_revenue(deliveredOrders.stream()
-                .map(Order::getTotalAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add))
-            .average_order_value(deliveredOrders.isEmpty() ? BigDecimal.ZERO :
-                deliveredOrders.stream()
-                    .map(Order::getTotalAmount)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add)
-                    .divide(BigDecimal.valueOf(deliveredOrders.size()), 2, java.math.RoundingMode.HALF_UP))
-            .completion_rate(orders.isEmpty() ? 0.0 :
-                (double) deliveredOrders.size() / orders.size() * 100)
-            .build();
+                .total_orders(orders.size())
+                .total_revenue(deliveredOrders.stream()
+                        .map(Order::getTotalAmount)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add))
+                .average_order_value(deliveredOrders.isEmpty() ? BigDecimal.ZERO :
+                        deliveredOrders.stream()
+                                .map(Order::getTotalAmount)
+                                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                                .divide(BigDecimal.valueOf(deliveredOrders.size()), 2, java.math.RoundingMode.HALF_UP))
+                .completion_rate(orders.isEmpty() ? 0.0 :
+                        (double) deliveredOrders.size() / orders.size() * 100)
+                .build();
 
         // Status breakdown
         Map<String, Integer> statusBreakdown = new HashMap<>();
         for (Order.OrderStatus status : Order.OrderStatus.values()) {
-            statusBreakdown.put(status.name(), 
-                (int) orders.stream().filter(o -> o.getStatus() == status).count());
+            statusBreakdown.put(status.name(),
+                    (int) orders.stream().filter(o -> o.getStatus() == status).count());
         }
 
         // Daily stats
         List<Object[]> dailyStatsData = orderRepository.getDailyOrderStatisticsByDateRange(fromDateTime, toDateTime);
         List<OrderStatisticsResponse.DailyStat> dailyStats = dailyStatsData.stream()
-            .map(data -> {
-                // Handle different date types from database
-                LocalDate date;
-                if (data[0] instanceof java.sql.Date) {
-                    date = ((java.sql.Date) data[0]).toLocalDate();
-                } else if (data[0] instanceof java.time.LocalDate) {
-                    date = (LocalDate) data[0];
-                } else if (data[0] instanceof java.util.Date) {
-                    date = ((java.util.Date) data[0]).toInstant()
-                        .atZone(java.time.ZoneId.systemDefault())
-                        .toLocalDate();
-                } else {
-                    // Try to parse as string
-                    date = LocalDate.parse(data[0].toString());
-                }
-                
-                Long ordersCount = ((Number) data[1]).longValue();
-                BigDecimal revenue = data[2] != null ? 
-                    BigDecimal.valueOf(((Number) data[2]).doubleValue()) : BigDecimal.ZERO;
-                
-                return OrderStatisticsResponse.DailyStat.builder()
-                    .date(date.toString())
-                    .orders_count(ordersCount.intValue())
-                    .revenue(revenue)
-                    .build();
-            })
-            .collect(Collectors.toList());
+                .map(data -> {
+                    // Handle different date types from database
+                    LocalDate date;
+                    if (data[0] instanceof java.sql.Date) {
+                        date = ((java.sql.Date) data[0]).toLocalDate();
+                    } else if (data[0] instanceof java.time.LocalDate) {
+                        date = (LocalDate) data[0];
+                    } else if (data[0] instanceof java.util.Date) {
+                        date = ((java.util.Date) data[0]).toInstant()
+                                .atZone(java.time.ZoneId.systemDefault())
+                                .toLocalDate();
+                    } else {
+                        // Try to parse as string
+                        date = LocalDate.parse(data[0].toString());
+                    }
+
+                    Long ordersCount = ((Number) data[1]).longValue();
+                    BigDecimal revenue = data[2] != null ?
+                            BigDecimal.valueOf(((Number) data[2]).doubleValue()) : BigDecimal.ZERO;
+
+                    return OrderStatisticsResponse.DailyStat.builder()
+                            .date(date.toString())
+                            .orders_count(ordersCount.intValue())
+                            .revenue(revenue)
+                            .build();
+                })
+                .collect(Collectors.toList());
 
         // Top products (limit to top 10)
         List<Object[]> topProductsData = orderItemRepository.findTopProductsByRevenueInDateRange(
-            fromDateTime, toDateTime, 10);
+                fromDateTime, toDateTime, 10);
         List<OrderStatisticsResponse.TopProduct> topProducts = topProductsData.stream()
-            .map(data -> {
-                Long productId = ((Number) data[0]).longValue();
-                String productName = (String) data[1];
-                Long quantitySold = ((Number) data[2]).longValue();
-                BigDecimal revenue = data[3] != null ? 
-                    BigDecimal.valueOf(((Number) data[3]).doubleValue()) : BigDecimal.ZERO;
-                
-                return OrderStatisticsResponse.TopProduct.builder()
-                    .product_id(productId)
-                    .product_name(productName)
-                    .quantity_sold(quantitySold.intValue())
-                    .revenue(revenue)
-                    .build();
-            })
-            .collect(Collectors.toList());
+                .map(data -> {
+                    Long productId = ((Number) data[0]).longValue();
+                    String productName = (String) data[1];
+                    Long quantitySold = ((Number) data[2]).longValue();
+                    BigDecimal revenue = data[3] != null ?
+                            BigDecimal.valueOf(((Number) data[3]).doubleValue()) : BigDecimal.ZERO;
+
+                    return OrderStatisticsResponse.TopProduct.builder()
+                            .product_id(productId)
+                            .product_name(productName)
+                            .quantity_sold(quantitySold.intValue())
+                            .revenue(revenue)
+                            .build();
+                })
+                .collect(Collectors.toList());
 
         OrderStatisticsResponse response = OrderStatisticsResponse.builder()
-            .period(period)
-            .from_date(fromDate)
-            .to_date(toDate)
-            .overview(overview)
-            .status_breakdown(statusBreakdown)
-            .daily_stats(dailyStats)
-            .top_products(topProducts)
-            .build();
+                .period(period)
+                .from_date(fromDate)
+                .to_date(toDate)
+                .overview(overview)
+                .status_breakdown(statusBreakdown)
+                .daily_stats(dailyStats)
+                .top_products(topProducts)
+                .build();
 
         return ApiResponse.success("Order statistics retrieved successfully", response);
     }
@@ -1065,16 +1184,16 @@ public class OrderService {
         // SHIPPED -> DELIVERED
         // DELIVERED -> (no transitions)
         // CANCELLED -> (no transitions)
-        
+
         if (oldStatus == Order.OrderStatus.PENDING) {
-            return newStatus == Order.OrderStatus.PROCESSING || 
-                   newStatus == Order.OrderStatus.SHIPPED || 
-                   newStatus == Order.OrderStatus.DELIVERED || 
-                   newStatus == Order.OrderStatus.CANCELLED;
+            return newStatus == Order.OrderStatus.PROCESSING ||
+                    newStatus == Order.OrderStatus.SHIPPED ||
+                    newStatus == Order.OrderStatus.DELIVERED ||
+                    newStatus == Order.OrderStatus.CANCELLED;
         }
         if (oldStatus == Order.OrderStatus.PROCESSING) {
-            return newStatus == Order.OrderStatus.SHIPPED || 
-                   newStatus == Order.OrderStatus.DELIVERED;
+            return newStatus == Order.OrderStatus.SHIPPED ||
+                    newStatus == Order.OrderStatus.DELIVERED;
         }
         if (oldStatus == Order.OrderStatus.SHIPPED) {
             return newStatus == Order.OrderStatus.DELIVERED;
@@ -1087,27 +1206,27 @@ public class OrderService {
      */
     private LocalDateTime getOrderDeliveredDate(Order order) {
         List<OrderTracking> trackingHistory = orderTrackingRepository.findByOrder(order);
-        
+
         // Find the first tracking event with DELIVERED status
         return trackingHistory.stream()
-            .filter(tracking -> tracking.getStatus() == Order.OrderStatus.DELIVERED)
-            .min(java.util.Comparator.comparing(OrderTracking::getCreatedAt))
-            .map(OrderTracking::getCreatedAt)
-            .orElse(null);
+                .filter(tracking -> tracking.getStatus() == Order.OrderStatus.DELIVERED)
+                .min(java.util.Comparator.comparing(OrderTracking::getCreatedAt))
+                .map(OrderTracking::getCreatedAt)
+                .orElse(null);
     }
 
     private OrderTrackingResponse buildTrackingResponseFromDatabase(Order order, List<OrderTracking> trackingHistory) {
         List<OrderTrackingResponse.TrackingEvent> events = new java.util.ArrayList<>();
-        
+
         // Get latest tracking info (from most recent tracking event that has tracking info)
         String latestTrackingNumber = "";
         String latestShippingPartner = "";
         LocalDateTime latestEstimatedDelivery = null;
-        
+
         // Convert tracking history to events and find latest tracking info
         for (int i = trackingHistory.size() - 1; i >= 0; i--) {
             OrderTracking tracking = trackingHistory.get(i);
-            
+
             // Get latest tracking info from tracking events
             if (latestTrackingNumber.isEmpty() && tracking.getTrackingNumber() != null && !tracking.getTrackingNumber().isEmpty()) {
                 latestTrackingNumber = tracking.getTrackingNumber();
@@ -1118,23 +1237,23 @@ public class OrderService {
             if (latestEstimatedDelivery == null && tracking.getEstimatedDelivery() != null) {
                 latestEstimatedDelivery = tracking.getEstimatedDelivery();
             }
-            
+
             events.add(OrderTrackingResponse.TrackingEvent.builder()
-                .status(tracking.getStatus().name())
-                .description(tracking.getDescription() != null ? tracking.getDescription() : getStatusDescription(tracking.getStatus()))
-                .location(tracking.getLocation() != null ? tracking.getLocation() : "")
-                .timestamp(tracking.getCreatedAt())
-                .build());
+                    .status(tracking.getStatus().name())
+                    .description(tracking.getDescription() != null ? tracking.getDescription() : getStatusDescription(tracking.getStatus()))
+                    .location(tracking.getLocation() != null ? tracking.getLocation() : "")
+                    .timestamp(tracking.getCreatedAt())
+                    .build());
         }
 
         return OrderTrackingResponse.builder()
-            .order_number(order.getOrderNumber())
-            .current_status(order.getStatus().name())
-            .tracking_number(latestTrackingNumber)
-            .shipping_partner(latestShippingPartner)
-            .estimated_delivery(latestEstimatedDelivery)
-            .tracking_events(events)
-            .build();
+                .order_number(order.getOrderNumber())
+                .current_status(order.getStatus().name())
+                .tracking_number(latestTrackingNumber)
+                .shipping_partner(latestShippingPartner)
+                .estimated_delivery(latestEstimatedDelivery)
+                .tracking_events(events)
+                .build();
     }
 
     private String getStatusDescription(Order.OrderStatus status) {
@@ -1150,102 +1269,96 @@ public class OrderService {
 
     private OrderListResponse.OrderItem mapToOrderListItem(Order order) {
         List<OrderItem> items = orderItemRepository.findByOrder(order);
-        
+
         List<OrderListResponse.ItemPreview> preview = items.stream()
-            .limit(3)
-            .map(item -> OrderListResponse.ItemPreview.builder()
-                .product_name(item.getProduct().getName())
-                .product_image(getProductImage(item.getProduct()))
-                .quantity(item.getQuantity())
-                .build())
-            .collect(Collectors.toList());
+                .limit(3)
+                .map(item -> OrderListResponse.ItemPreview.builder()
+                        .product_name(item.getProduct().getName())
+                        .product_image(getProductImage(item.getProduct()))
+                        .quantity(item.getQuantity())
+                        .build())
+                .collect(Collectors.toList());
 
         return OrderListResponse.OrderItem.builder()
-            .id(order.getId())
-            .order_number(order.getOrderNumber())
-            .total_amount(order.getTotalAmount())
-            .status(order.getStatus().name())
-            .payment_method(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "COD")
-            .items_count(items.size())
-            .items_preview(preview)
-            .created_at(order.getCreatedAt())
-            .delivered_at(order.getStatus() == Order.OrderStatus.DELIVERED ? order.getCreatedAt() : null)
-            .can_cancel(order.canBeCancelled())
-            .can_review(order.getStatus() == Order.OrderStatus.DELIVERED)
-            .build();
+                .id(order.getId())
+                .order_number(order.getOrderNumber())
+                .total_amount(order.getTotalAmount())
+                .status(order.getStatus().name())
+                .payment_method(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "COD")
+                .items_count(items.size())
+                .items_preview(preview)
+                .created_at(order.getCreatedAt())
+                .delivered_at(order.getStatus() == Order.OrderStatus.DELIVERED ? order.getCreatedAt() : null)
+                .can_cancel(order.canBeCancelled())
+                .can_review(order.getStatus() == Order.OrderStatus.DELIVERED)
+                .build();
     }
 
     private OrderDetailResponseNew mapToOrderDetailResponseNew(Order order) {
         List<OrderItem> items = orderItemRepository.findByOrder(order);
-        
+
         List<OrderDetailResponseNew.OrderItemDetail> orderItems = items.stream()
-            .map(item -> {
-                // Use is_reviewed from entity (stored in database)
-                Boolean isReviewed = item.getIsReviewed() != null ? item.getIsReviewed() : false;
-                
-                return OrderDetailResponseNew.OrderItemDetail.builder()
-                    .id(item.getId())
-                    .product(OrderDetailResponseNew.ProductInfo.builder()
-                        .id(item.getProduct().getId())
-                        .name(item.getProduct().getName())
-                        .slug(item.getProduct().getSlug())
-                        .image(getProductImage(item.getProduct()))
+                .map(item -> OrderDetailResponseNew.OrderItemDetail.builder()
+                        .id(item.getId())
+                        .product(OrderDetailResponseNew.ProductInfo.builder()
+                                .id(item.getProduct().getId())
+                                .name(item.getProduct().getName())
+                                .slug(item.getProduct().getSlug())
+                                .image(getProductImage(item.getProduct()))
+                                .build())
+                        .color_name(item.getColor() != null ? item.getColor().getColorName() : "")
+                        .quantity(item.getQuantity())
+                        .unit_price(item.getUnitPrice())
+                        .line_total(item.getTotalPrice())
                         .build())
-                    .color_name(item.getColor() != null ? item.getColor().getColorName() : "")
-                    .quantity(item.getQuantity())
-                    .unit_price(item.getUnitPrice())
-                    .line_total(item.getTotalPrice())
-                    .is_reviewed(isReviewed)
-                    .build();
-            })
-            .collect(Collectors.toList());
+                .collect(Collectors.toList());
 
         // Build status history from tracking
         List<OrderDetailResponseNew.StatusHistory> statusHistory = buildStatusHistoryFromTracking(order);
 
         return OrderDetailResponseNew.builder()
-            .id(order.getId())
-            .order_number(order.getOrderNumber())
-            .user(OrderDetailResponseNew.UserInfo.builder()
-                .id(order.getUser().getId())
-                .full_name(order.getUser().getFullName())
-                .email(order.getUser().getEmail())
-                .phone(order.getUser().getPhone())
-                .build())
-            .total_amount(order.getTotalAmount())
-            .status(order.getStatus().name())
-            .payment_method(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "COD")
-            .shipping_address(order.getShippingAddress())
-            .note(order.getNotes())
-            .items(orderItems)
-            .status_history(buildStatusHistoryFromTracking(order))
-            .tracking_info(buildTrackingInfoFromLatestTracking(order))
-            .created_at(order.getCreatedAt())
-            .updated_at(order.getUpdatedAt() != null ? order.getUpdatedAt() : order.getCreatedAt())
-            .can_cancel(order.canBeCancelled())
-            .can_review(order.getStatus() == Order.OrderStatus.DELIVERED)
-            .build();
+                .id(order.getId())
+                .order_number(order.getOrderNumber())
+                .user(OrderDetailResponseNew.UserInfo.builder()
+                        .id(order.getUser().getId())
+                        .full_name(order.getUser().getFullName())
+                        .email(order.getUser().getEmail())
+                        .phone(order.getUser().getPhone())
+                        .build())
+                .total_amount(order.getTotalAmount())
+                .status(order.getStatus().name())
+                .payment_method(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "COD")
+                .shipping_address(order.getShippingAddress())
+                .note(order.getNotes())
+                .items(orderItems)
+                .status_history(buildStatusHistoryFromTracking(order))
+                .tracking_info(buildTrackingInfoFromLatestTracking(order))
+                .created_at(order.getCreatedAt())
+                .updated_at(order.getUpdatedAt() != null ? order.getUpdatedAt() : order.getCreatedAt())
+                .can_cancel(order.canBeCancelled())
+                .can_review(order.getStatus() == Order.OrderStatus.DELIVERED)
+                .build();
     }
 
     private AdminOrderListResponse.AdminOrderItem mapToAdminOrderItem(Order order) {
         List<OrderItem> items = orderItemRepository.findByOrder(order);
-        
+
         return AdminOrderListResponse.AdminOrderItem.builder()
-            .id(order.getId())
-            .order_number(order.getOrderNumber())
-            .user(AdminOrderListResponse.UserInfo.builder()
-                .id(order.getUser().getId())
-                .full_name(order.getUser().getFullName())
-                .email(order.getUser().getEmail())
-                .phone(order.getUser().getPhone())
-                .build())
-            .total_amount(order.getTotalAmount())
-            .status(order.getStatus().name())
-            .payment_method(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "COD")
-            .items_count(items.size())
-            .shipping_address(order.getShippingAddress())
-            .created_at(order.getCreatedAt() != null ? order.getCreatedAt().format(ISO_FORMATTER) : null)
-            .build();
+                .id(order.getId())
+                .order_number(order.getOrderNumber())
+                .user(AdminOrderListResponse.UserInfo.builder()
+                        .id(order.getUser().getId())
+                        .full_name(order.getUser().getFullName())
+                        .email(order.getUser().getEmail())
+                        .phone(order.getUser().getPhone())
+                        .build())
+                .total_amount(order.getTotalAmount())
+                .status(order.getStatus().name())
+                .payment_method(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : "COD")
+                .items_count(items.size())
+                .shipping_address(order.getShippingAddress())
+                .created_at(order.getCreatedAt() != null ? order.getCreatedAt().format(ISO_FORMATTER) : null)
+                .build();
     }
 
     private AdminOrderListResponse.SummaryInfo buildSummaryInfo() {
@@ -1258,14 +1371,14 @@ public class OrderService {
         BigDecimal totalRevenue = orderRepository.calculateTotalRevenue();
 
         return AdminOrderListResponse.SummaryInfo.builder()
-            .total_orders((int) totalOrders)
-            .pending_orders((int) pendingOrders)
-            .processing_orders((int) processingOrders)
-            .shipped_orders((int) shippedOrders)
-            .delivered_orders((int) deliveredOrders)
-            .cancelled_orders((int) cancelledOrders)
-            .total_revenue(totalRevenue != null ? totalRevenue : BigDecimal.ZERO)
-            .build();
+                .total_orders((int) totalOrders)
+                .pending_orders((int) pendingOrders)
+                .processing_orders((int) processingOrders)
+                .shipped_orders((int) shippedOrders)
+                .delivered_orders((int) deliveredOrders)
+                .cancelled_orders((int) cancelledOrders)
+                .total_revenue(totalRevenue != null ? totalRevenue : BigDecimal.ZERO)
+                .build();
     }
 
     private String getProductImage(Product product) {
@@ -1278,14 +1391,14 @@ public class OrderService {
      */
     private List<OrderDetailResponseNew.StatusHistory> buildStatusHistoryFromTracking(Order order) {
         List<OrderTracking> trackingHistory = orderTrackingRepository.findByOrderId(order.getId());
-        
+
         return trackingHistory.stream()
-            .map(tracking -> OrderDetailResponseNew.StatusHistory.builder()
-                .status(tracking.getStatus().name())
-                .changed_at(tracking.getCreatedAt())
-                .note(tracking.getNote() != null ? tracking.getNote() : tracking.getDescription())
-                .build())
-            .collect(Collectors.toList());
+                .map(tracking -> OrderDetailResponseNew.StatusHistory.builder()
+                        .status(tracking.getStatus().name())
+                        .changed_at(tracking.getCreatedAt())
+                        .note(tracking.getNote() != null ? tracking.getNote() : tracking.getDescription())
+                        .build())
+                .collect(Collectors.toList());
     }
 
     /**
@@ -1293,15 +1406,15 @@ public class OrderService {
      */
     private OrderDetailResponseNew.TrackingInfo buildTrackingInfoFromLatestTracking(Order order) {
         List<OrderTracking> trackingHistory = orderTrackingRepository.findByOrderId(order.getId());
-        
+
         // Find latest tracking info from tracking events (most recent that has tracking info)
         String trackingNumber = "";
         String shippingPartner = "";
         LocalDateTime estimatedDelivery = null;
-        
+
         for (int i = trackingHistory.size() - 1; i >= 0; i--) {
             OrderTracking tracking = trackingHistory.get(i);
-            
+
             if (trackingNumber.isEmpty() && tracking.getTrackingNumber() != null && !tracking.getTrackingNumber().isEmpty()) {
                 trackingNumber = tracking.getTrackingNumber();
             }
@@ -1311,17 +1424,198 @@ public class OrderService {
             if (estimatedDelivery == null && tracking.getEstimatedDelivery() != null) {
                 estimatedDelivery = tracking.getEstimatedDelivery();
             }
-            
+
             // If we found all info, break early
             if (!trackingNumber.isEmpty() && !shippingPartner.isEmpty() && estimatedDelivery != null) {
                 break;
             }
         }
-        
+
         return OrderDetailResponseNew.TrackingInfo.builder()
-            .estimated_delivery(estimatedDelivery)
-            .shipping_partner(shippingPartner)
-            .tracking_number(trackingNumber)
-            .build();
+                .estimated_delivery(estimatedDelivery)
+                .shipping_partner(shippingPartner)
+                .tracking_number(trackingNumber)
+                .build();
+    }
+
+    /**
+     * Send order confirmation email to customer
+     * @param order Order entity
+     * @param orderItems List of order items
+     */
+    private void sendOrderConfirmationEmail(Order order, List<OrderItem> orderItems) {
+        try {
+            String customerEmail = order.getUser().getEmail();
+            String customerName = order.getUser().getFullName() != null
+                    ? order.getUser().getFullName()
+                    : order.getUser().getEmail();
+
+            log.info("Preparing order confirmation email for order: {} to: {}", order.getOrderNumber(), customerEmail);
+
+            String subject = "Xác nhận đơn hàng " + order.getOrderNumber() + " - PhoneStore";
+            String htmlContent = buildOrderConfirmationEmailHtml(order, orderItems, customerName);
+
+            log.info("Calling emailService.sendEmail() for order: {}", order.getOrderNumber());
+            emailService.sendEmail(customerEmail, subject, htmlContent);
+            log.info("Order confirmation email sent successfully to: {}", customerEmail);
+        } catch (Exception e) {
+            log.error("Error sending order confirmation email to: {} for order: {}. Error: {}",
+                    order.getUser().getEmail(), order.getOrderNumber(), e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * Build HTML email template for order confirmation
+     */
+    private String buildOrderConfirmationEmailHtml(Order order, List<OrderItem> orderItems, String customerName) {
+        DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+        String orderDate = order.getCreatedAt().format(dateFormatter);
+
+        // Format total amount
+        String totalAmount = String.format("%,d", order.getTotalAmount().longValue()) + "₫";
+
+        // Build payment method label
+        String paymentMethodLabel = getPaymentMethodLabel(order.getPaymentMethod());
+
+        // Build order items HTML
+        StringBuilder itemsHtml = new StringBuilder();
+        for (OrderItem item : orderItems) {
+            String productName = item.getProduct().getName();
+            String colorName = item.getColor() != null ? item.getColor().getColorName() : "";
+            int quantity = item.getQuantity();
+            String unitPrice = String.format("%,d", item.getUnitPrice().longValue()) + "₫";
+            String lineTotal = String.format("%,d", item.getTotalPrice().longValue()) + "₫";
+            String productImage = getProductImage(item.getProduct());
+
+            itemsHtml.append("<tr style='border-bottom: 1px solid #e9ecef;'>")
+                    .append("<td style='padding: 15px;'>")
+                    .append("<div style='display: flex; gap: 15px;'>")
+                    .append("<img src='").append(productImage).append("' alt='").append(productName)
+                    .append("' style='width: 80px; height: 80px; object-fit: cover; border-radius: 8px;' />")
+                    .append("<div style='flex: 1;'>")
+                    .append("<h4 style='margin: 0 0 5px 0; color: #333; font-size: 16px;'>").append(productName).append("</h4>");
+
+            if (!colorName.isEmpty()) {
+                itemsHtml.append("<p style='margin: 0 0 5px 0; color: #666; font-size: 14px;'>Màu: ").append(colorName).append("</p>");
+            }
+
+            itemsHtml.append("<p style='margin: 0; color: #999; font-size: 12px;'>Số lượng: ").append(quantity)
+                    .append(" × ").append(unitPrice).append("</p>")
+                    .append("</div>")
+                    .append("<div style='text-align: right;'>")
+                    .append("<p style='margin: 0; color: #333; font-size: 16px; font-weight: bold;'>").append(lineTotal).append("</p>")
+                    .append("</div>")
+                    .append("</div>")
+                    .append("</td>")
+                    .append("</tr>");
+        }
+
+        // Build shipping address HTML
+        StringBuilder shippingAddressHtml = new StringBuilder();
+        if (order.getShippingAddress() != null && !order.getShippingAddress().isEmpty()) {
+            shippingAddressHtml.append("<div style='margin-top: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 8px;'>")
+                    .append("<h3 style='color: #333333; margin: 0 0 10px 0; font-size: 16px;'>Địa chỉ giao hàng:</h3>")
+                    .append("<p style='color: #666666; margin: 0; line-height: 1.6;'>")
+                    .append(order.getShippingAddress().replace("\n", "<br>"))
+                    .append("</p>")
+                    .append("</div>");
+        }
+
+        return "<!DOCTYPE html>" +
+                "<html>" +
+                "<head>" +
+                "<meta charset='UTF-8'>" +
+                "<meta name='viewport' content='width=device-width, initial-scale=1.0'>" +
+                "<title>Xác nhận đơn hàng</title>" +
+                "</head>" +
+                "<body style='margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f4f4f4;'>" +
+                "<table width='100%' cellpadding='0' cellspacing='0' style='background-color: #f4f4f4; padding: 20px;'>" +
+                "<tr>" +
+                "<td align='center'>" +
+                "<table width='600' cellpadding='0' cellspacing='0' style='background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1);'>" +
+                "<!-- Header -->" +
+                "<tr>" +
+                "<td style='background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center;'>" +
+                "<h1 style='color: #ffffff; margin: 0; font-size: 28px;'>PhoneStore</h1>" +
+                "</td>" +
+                "</tr>" +
+                "<!-- Content -->" +
+                "<tr>" +
+                "<td style='padding: 40px 30px;'>" +
+                "<h2 style='color: #333333; margin: 0 0 20px 0; font-size: 24px;'>Cảm ơn bạn đã đặt hàng!</h2>" +
+                "<p style='color: #666666; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;'>" +
+                "Xin chào <strong>" + customerName + "</strong>,<br><br>" +
+                "Chúng tôi đã nhận được đơn hàng của bạn và đang xử lý. Dưới đây là thông tin chi tiết đơn hàng:" +
+                "</p>" +
+                "<!-- Order Info Box -->" +
+                "<div style='background-color: #f8f9fa; border: 2px solid #e9ecef; border-radius: 8px; padding: 20px; margin: 30px 0;'>" +
+                "<div style='margin-bottom: 15px;'>" +
+                "<strong style='color: #333;'>Mã đơn hàng:</strong> " +
+                "<span style='color: #667eea; font-size: 18px; font-weight: bold;'>" + order.getOrderNumber() + "</span>" +
+                "</div>" +
+                "<div style='margin-bottom: 15px;'>" +
+                "<strong style='color: #333;'>Ngày đặt:</strong> " +
+                "<span style='color: #666;'>" + orderDate + "</span>" +
+                "</div>" +
+                "<div style='margin-bottom: 15px;'>" +
+                "<strong style='color: #333;'>Phương thức thanh toán:</strong> " +
+                "<span style='color: #666;'>" + paymentMethodLabel + "</span>" +
+                "</div>" +
+                "<div>" +
+                "<strong style='color: #333;'>Tổng tiền:</strong> " +
+                "<span style='color: #e74c3c; font-size: 20px; font-weight: bold;'>" + totalAmount + "</span>" +
+                "</div>" +
+                "</div>" +
+                "<!-- Order Items -->" +
+                "<h3 style='color: #333333; margin: 30px 0 15px 0; font-size: 18px;'>Sản phẩm đã đặt:</h3>" +
+                "<table width='100%' cellpadding='0' cellspacing='0' style='border: 1px solid #e9ecef; border-radius: 8px; overflow: hidden;'>" +
+                itemsHtml.toString() +
+                "</table>" +
+                shippingAddressHtml.toString() +
+                "<!-- Footer Message -->" +
+                "<p style='color: #999999; font-size: 14px; line-height: 1.6; margin: 30px 0 0 0;'>" +
+                "Bạn có thể theo dõi đơn hàng của mình tại trang Quản lý đơn hàng." +
+                "</p>" +
+                "<p style='color: #999999; font-size: 14px; line-height: 1.6; margin: 20px 0 0 0;'>" +
+                "Nếu bạn có bất kỳ câu hỏi nào, vui lòng liên hệ với chúng tôi qua email hoặc hotline." +
+                "</p>" +
+                "</td>" +
+                "</tr>" +
+                "<!-- Footer -->" +
+                "<tr>" +
+                "<td style='background-color: #f8f9fa; padding: 20px 30px; text-align: center; border-top: 1px solid #e9ecef;'>" +
+                "<p style='color: #999999; font-size: 12px; margin: 0;'>" +
+                "© 2024 PhoneStore. All rights reserved." +
+                "</p>" +
+                "</td>" +
+                "</tr>" +
+                "</table>" +
+                "</td>" +
+                "</tr>" +
+                "</table>" +
+                "</body>" +
+                "</html>";
+    }
+
+    /**
+     * Get payment method label in Vietnamese
+     */
+    private String getPaymentMethodLabel(Order.PaymentMethod method) {
+        if (method == null) return "Thanh toán khi nhận hàng";
+        switch (method) {
+            case COD:
+                return "Thanh toán khi nhận hàng (COD)";
+            case BANK_TRANSFER:
+                return "Chuyển khoản ngân hàng";
+            case CREDIT_CARD:
+                return "Thẻ tín dụng";
+            case E_WALLET:
+                return "Ví điện tử";
+            case PAYPAL:
+                return "PayPal";
+            default:
+                return method.name();
+        }
     }
 }

@@ -32,6 +32,24 @@ public class CreateOrderRequest {
     @JsonProperty("cart_item_ids")
     private List<Long> cart_item_ids;
 
+    @JsonProperty("buy_now_items")
+    private List<BuyNowItem> buy_now_items;
+
+    // Inner class for buy now items
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class BuyNowItem {
+        @JsonProperty("product_id")
+        private Long product_id;
+
+        @JsonProperty("color_id")
+        private Long color_id;
+
+        @JsonProperty("quantity")
+        private Integer quantity;
+    }
+
     // Backward compatibility
     public String getShippingAddress() {
         return shipping_address;
@@ -47,5 +65,9 @@ public class CreateOrderRequest {
 
     public List<Long> getCartItemIds() {
         return cart_item_ids;
+    }
+
+    public List<BuyNowItem> getBuyNowItems() {
+        return buy_now_items;
     }
 }
